@@ -84,6 +84,7 @@ extern crate unwrap;
 extern crate safe_crypto;
 
 mod block;
+mod core;
 mod dump_graph;
 mod error;
 mod gossip;
