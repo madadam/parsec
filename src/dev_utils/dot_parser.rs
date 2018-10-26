@@ -561,15 +561,13 @@ mod tests {
     #[test]
     fn dot_parser() {
         let mut env = Environment::new(SEED);
-        let schedule = Schedule::new(
-            &mut env,
-            &ScheduleOptions {
+        let schedule = Schedule::build(&mut env)
+            .with_options(&ScheduleOptions {
                 genesis_size: 4,
                 opaque_to_add: 5,
                 gossip_prob: 0.8,
                 ..Default::default()
-            },
-        );
+            }).finish();
 
         let result = env.network.execute_schedule(schedule);
         assert!(result.is_ok(), "{:?}", result);

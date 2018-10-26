@@ -197,6 +197,11 @@ impl<T: NetworkEvent, S: SecretId> Core<T, S> {
         }
     }
 
+    /// Public id of this node.
+    pub fn our_pub_id(&self) -> &S::PublicId {
+        self.peer_list.our_pub_id()
+    }
+
     /// Steps the algorithm and returns the next stable block, if any.
     ///
     /// Once we have been removed (i.e. a block with payload `Observation::Remove(our_id)` has been
@@ -204,6 +209,15 @@ impl<T: NetworkEvent, S: SecretId> Core<T, S> {
     /// block, it will continue to return `None` forever.
     pub fn poll(&mut self) -> Option<Block<T, S::PublicId>> {
         self.consensused_blocks.pop_front()
+    }
+
+    /// Checks if the given `observation` has already been voted for by us.
+    pub fn have_voted_for(&self, observation: &Observation<T, S::PublicId>) -> bool {
+        self.events.values().any(|event| {
+            event.creator() == self.our_pub_id() && event
+                .vote()
+                .map_or(false, |voted| voted.payload() == observation)
+        })
     }
 
     /// Check if there are any observation that have been voted for but not yet consensused.
@@ -219,10 +233,6 @@ impl<T: NetworkEvent, S: SecretId> Core<T, S> {
     pub fn our_unpolled_observations(&self) -> impl Iterator<Item = &Observation<T, S::PublicId>> {
         self.our_consensused_observations()
             .chain(self.our_unconsensused_observations())
-    }
-
-    pub fn our_pub_id(&self) -> &S::PublicId {
-        self.peer_list.our_pub_id()
     }
 
     /// Unpack single packed event and update the set of forking peers if fork is detected.

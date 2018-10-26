@@ -6,8 +6,11 @@
 // KIND, either express or implied. Please review the Licences for the specific language governing
 // permissions and limitations relating to use of the SAFE Network Software.
 
+use super::malice::{MaliceEvent, MaliciousParsec};
 use super::Observation;
 use block::Block;
+use error::Result;
+use gossip::{Request, Response};
 use mock::{PeerId, Transaction};
 use observation::Observation as ParsecObservation;
 use parsec::{self, Parsec};
@@ -24,41 +27,69 @@ pub enum PeerStatus {
 }
 
 pub struct Peer {
-    pub id: PeerId,
-    pub parsec: Parsec<Transaction, PeerId>,
     /// The blocks returned by `parsec.poll()`, held in the order in which they were returned.
     pub blocks: Vec<Block<Transaction, PeerId>>,
     pub status: PeerStatus,
+
+    personality: Personality,
     votes_to_make: Vec<Observation>,
 }
 
 impl Peer {
-    pub fn new(id: PeerId, genesis_group: &BTreeSet<PeerId>) -> Self {
+    pub fn from_genesis(our_id: PeerId, genesis_group: &BTreeSet<PeerId>) -> Self {
         Self {
-            id: id.clone(),
-            parsec: Parsec::from_genesis(id, genesis_group, parsec::is_supermajority),
             blocks: vec![],
             status: PeerStatus::Active,
+            personality: Personality::Honest(Parsec::from_genesis(
+                our_id,
+                genesis_group,
+                parsec::is_supermajority,
+            )),
             votes_to_make: vec![],
         }
     }
 
-    pub fn new_joining(
-        id: PeerId,
-        current_group: &BTreeSet<PeerId>,
+    pub fn honest(
+        our_id: PeerId,
         genesis_group: &BTreeSet<PeerId>,
+        current_group: &BTreeSet<PeerId>,
     ) -> Self {
         Self {
-            id: id.clone(),
-            parsec: Parsec::from_existing(
-                id,
+            blocks: vec![],
+            status: PeerStatus::Pending,
+            personality: Personality::Honest(Parsec::from_existing(
+                our_id,
                 genesis_group,
                 current_group,
                 parsec::is_supermajority,
-            ),
+            )),
+            votes_to_make: vec![],
+        }
+    }
+
+    pub fn malicious(
+        our_id: PeerId,
+        genesis_group: &BTreeSet<PeerId>,
+        current_group: &BTreeSet<PeerId>,
+        malice_schedule: Vec<(usize, MaliceEvent)>,
+    ) -> Self {
+        Self {
             blocks: vec![],
             status: PeerStatus::Pending,
+            personality: Personality::Malicious(MaliciousParsec::from_existing(
+                our_id,
+                genesis_group,
+                current_group,
+                malice_schedule,
+            )),
             votes_to_make: vec![],
+        }
+    }
+
+    pub fn id(&self) -> &PeerId {
+        match self.personality {
+            Personality::Honest(ref p) => p.our_pub_id(),
+            Personality::Malicious(ref p) => p.our_pub_id(),
         }
     }
 
@@ -66,26 +97,61 @@ impl Peer {
         self.votes_to_make.push(observation.clone());
     }
 
-    pub fn make_votes(&mut self) {
-        let parsec = &mut self.parsec;
-        self.votes_to_make
-            .retain(|obs| !parsec.have_voted_for(obs) && parsec.vote_for(obs.clone()).is_err());
-    }
-
-    fn make_active_if_added(&mut self, block: &Block<Transaction, PeerId>) {
-        if self.status == PeerStatus::Pending {
-            if let ParsecObservation::Add(ref peer) = *block.payload() {
-                if self.id == *peer {
-                    self.status = PeerStatus::Active;
-                }
+    pub fn before_step(&mut self, step: usize) {
+        match self.personality {
+            Personality::Honest(ref mut p) => self
+                .votes_to_make
+                .retain(|obs| !p.have_voted_for(obs) && p.vote_for(obs.clone()).is_err()),
+            Personality::Malicious(ref mut p) => {
+                p.prepare_malice(step);
+                self.votes_to_make
+                    .retain(|obs| !p.have_voted_for(obs) && p.vote_for(obs.clone()).is_err());
             }
         }
     }
 
     pub fn poll(&mut self) {
-        while let Some(block) = self.parsec.poll() {
-            self.make_active_if_added(&block);
-            self.blocks.push(block);
+        loop {
+            let block = match self.personality {
+                Personality::Honest(ref mut p) => p.poll(),
+                Personality::Malicious(ref mut p) => p.poll(),
+            };
+
+            if let Some(block) = block {
+                self.make_active_if_added(&block);
+                self.blocks.push(block);
+            } else {
+                break;
+            }
+        }
+    }
+
+    pub fn create_gossip(&self, dst: &PeerId) -> Result<Request<Transaction, PeerId>> {
+        match self.personality {
+            Personality::Honest(ref p) => p.create_gossip(Some(dst)),
+            Personality::Malicious(ref p) => p.create_gossip(Some(dst)),
+        }
+    }
+
+    pub fn handle_request(
+        &mut self,
+        src: &PeerId,
+        req: Request<Transaction, PeerId>,
+    ) -> Result<Response<Transaction, PeerId>> {
+        match self.personality {
+            Personality::Honest(ref mut p) => p.handle_request(src, req),
+            Personality::Malicious(ref mut p) => p.handle_request(src, req),
+        }
+    }
+
+    pub fn handle_response(
+        &mut self,
+        src: &PeerId,
+        res: Response<Transaction, PeerId>,
+    ) -> Result<()> {
+        match self.personality {
+            Personality::Honest(ref mut p) => p.handle_response(src, res),
+            Personality::Malicious(ref mut p) => p.handle_response(src, res),
         }
     }
 
@@ -98,12 +164,27 @@ impl Peer {
     pub fn blocks_payloads(&self) -> Vec<&Observation> {
         self.blocks.iter().map(Block::payload).collect()
     }
+
+    fn make_active_if_added(&mut self, block: &Block<Transaction, PeerId>) {
+        if self.status == PeerStatus::Pending {
+            if let ParsecObservation::Add(ref peer) = *block.payload() {
+                if self.id() == peer {
+                    self.status = PeerStatus::Active;
+                }
+            }
+        }
+    }
 }
 
 impl Debug for Peer {
     fn fmt(&self, formatter: &mut Formatter) -> fmt::Result {
-        write!(formatter, "{:?}: Blocks: {:?}", self.id, self.blocks)
+        write!(formatter, "{:?}: Blocks: {:?}", self.id(), self.blocks)
     }
+}
+
+enum Personality {
+    Honest(Parsec<Transaction, PeerId>),
+    Malicious(MaliciousParsec),
 }
 
 pub struct PeerStatuses(BTreeMap<PeerId, PeerStatus>);

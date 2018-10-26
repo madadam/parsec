@@ -6,6 +6,7 @@
 // KIND, either express or implied. Please review the Licences for the specific language governing
 // permissions and limitations relating to use of the SAFE Network Software.
 
+use super::malice::MaliceEvent;
 use super::Environment;
 use super::Observation;
 use super::{PeerStatus, PeerStatuses};
@@ -65,8 +66,10 @@ pub enum ScheduleEvent {
     Fail(PeerId),
     /// This event makes a node vote on the given observation.
     VoteFor(PeerId, Observation),
-    /// Adds a peer to the network (this is separate from nodes voting to add the peer)
-    AddPeer(PeerId),
+    /// Adds a honest peer to the network (this is separate from nodes voting to add the peer)
+    AddHonestPeer(PeerId),
+    /// Adds a malicious peer to the network with the given malice schedule.
+    AddMaliciousPeer(PeerId, Vec<(usize, MaliceEvent)>),
     /// Removes a peer from the network (this is separate from nodes voting to remove the peer)
     /// It is similar to Fail in that the peer will stop responding; however, this will also
     /// cause the other peers to vote for removal
@@ -140,7 +143,8 @@ impl ScheduleEvent {
             ScheduleEvent::LocalStep { ref peer, .. } => peer,
             ScheduleEvent::Fail(ref peer) => peer,
             ScheduleEvent::VoteFor(ref peer, _) => peer,
-            ScheduleEvent::AddPeer(ref peer) => peer,
+            ScheduleEvent::AddHonestPeer(ref peer) => peer,
+            ScheduleEvent::AddMaliciousPeer(ref peer, _) => peer,
             ScheduleEvent::RemovePeer(ref peer) => peer,
             ScheduleEvent::Genesis(_) => panic!("ScheduleEvent::get_peer called on Genesis!"),
         }
@@ -353,7 +357,11 @@ pub struct ObservationSchedule {
 }
 
 impl ObservationSchedule {
-    fn gen<R: Rng>(rng: &mut R, options: &ScheduleOptions) -> ObservationSchedule {
+    fn gen<R: Rng>(
+        rng: &mut R,
+        mut genesis_names: BTreeSet<PeerId>,
+        options: &ScheduleOptions,
+    ) -> ObservationSchedule {
         let mut schedule = vec![];
         let mut names_iter = NAMES.iter();
 
@@ -365,11 +373,14 @@ impl ObservationSchedule {
         let mut opaque_count: usize = 0;
 
         // schedule genesis first
-        let genesis_names = names_iter
-            .by_ref()
-            .take(options.genesis_size)
-            .map(|s| PeerId::new(*s))
-            .collect();
+        if genesis_names.is_empty() {
+            genesis_names.extend(
+                names_iter
+                    .by_ref()
+                    .take(options.genesis_size)
+                    .map(|s| PeerId::new(*s)),
+            )
+        }
         let mut peers = PeerStatuses::new(&genesis_names);
 
         let mut step: usize = 1;
@@ -476,6 +487,16 @@ impl fmt::Debug for Schedule {
 }
 
 impl Schedule {
+    pub fn build(env: &mut Environment) -> ScheduleBuilder {
+        ScheduleBuilder {
+            env,
+            options: None,
+            genesis: BTreeSet::new(),
+            obs_schedule: Vec::new(),
+            malice_schedule: BTreeMap::new(),
+        }
+    }
+
     #[cfg(feature = "dump-graphs")]
     fn save(&self, options: &ScheduleOptions) {
         let path = DIR.with(|dir| dir.join("schedule.txt"));
@@ -521,22 +542,64 @@ impl Schedule {
             }
         }
     }
+}
 
-    pub fn new(env: &mut Environment, options: &ScheduleOptions) -> Schedule {
-        let obs_schedule = ObservationSchedule::gen(&mut env.rng, options);
-        Self::from_observation_schedule(env, options, obs_schedule)
+pub struct ScheduleBuilder<'a, 'b> {
+    env: &'a mut Environment,
+    options: Option<&'b ScheduleOptions>,
+    genesis: BTreeSet<PeerId>,
+    obs_schedule: Vec<(usize, ObservationEvent)>,
+    malice_schedule: BTreeMap<PeerId, Vec<(usize, MaliceEvent)>>,
+}
+
+impl<'a, 'b> ScheduleBuilder<'a, 'b> {
+    pub fn with_options(mut self, options: &'b ScheduleOptions) -> Self {
+        self.options = Some(options);
+        self
     }
 
-    /// Creates a new pseudo-random schedule based on the given options
-    ///
+    pub fn with_observation_schedule(
+        mut self,
+        genesis_names: BTreeSet<PeerId>,
+        schedule: Vec<(usize, ObservationEvent)>,
+    ) -> Self {
+        self.genesis = genesis_names;
+        self.obs_schedule = schedule;
+        self
+    }
+
+    pub fn with_malice_schedule(
+        mut self,
+        peer_id: PeerId,
+        mut schedule: Vec<(usize, MaliceEvent)>,
+    ) -> Self {
+        self.malice_schedule
+            .entry(peer_id)
+            .or_insert_with(Vec::new)
+            .append(&mut schedule);
+        self
+    }
+
     /// The `let_and_return` clippy lint is allowed since it is actually necessary to create the
     /// `result` variable so the result can be saved when the `dump-graphs` feature is used.
     #[cfg_attr(feature = "cargo-clippy", allow(let_and_return))]
-    pub fn from_observation_schedule(
-        env: &mut Environment,
-        options: &ScheduleOptions,
-        mut obs_schedule: ObservationSchedule,
-    ) -> Schedule {
+    pub fn finish(self) -> Schedule {
+        let rng = &mut self.env.rng;
+
+        let default_options = ScheduleOptions::default();
+        let options = self.options.unwrap_or(&default_options);
+
+        let mut obs_schedule = if self.obs_schedule.is_empty() {
+            ObservationSchedule::gen(rng, self.genesis, options)
+        } else {
+            ObservationSchedule {
+                genesis: self.genesis,
+                schedule: self.obs_schedule,
+            }
+        };
+
+        let mut malice_schedule = self.malice_schedule;
+
         let mut pending = PendingObservations::new(options);
         // the +1 below is to account for genesis
         let num_observations = obs_schedule.count_observations() + 1;
@@ -552,7 +615,7 @@ impl Schedule {
         if options.votes_before_gossip {
             let opaque_transactions = obs_schedule.extract_opaque();
             for obs in opaque_transactions {
-                pending.peers_make_observation(&mut env.rng, peers.active_peers(), step, &obs);
+                pending.peers_make_observation(rng, peers.active_peers(), step, &obs);
                 observations_made.push(obs);
             }
         }
@@ -564,12 +627,21 @@ impl Schedule {
                     ObservationEvent::AddPeer(new_peer) => {
                         peers.add_peer(new_peer.clone());
                         pending.peers_make_observation(
-                            &mut env.rng,
+                            rng,
                             peers.active_peers(),
                             step,
                             &ParsecObservation::Add(new_peer.clone()),
                         );
-                        schedule.push(ScheduleEvent::AddPeer(new_peer.clone()));
+
+                        if let Some(malice_schedule) = malice_schedule.remove(&new_peer) {
+                            schedule.push(ScheduleEvent::AddMaliciousPeer(
+                                new_peer.clone(),
+                                malice_schedule,
+                            ));
+                        } else {
+                            schedule.push(ScheduleEvent::AddHonestPeer(new_peer.clone()));
+                        }
+
                         // vote for all observations that were made before this peer joined
                         // this prevents situations in which peers joining reach consensus before
                         // some other observations they haven't seen, which cause those
@@ -577,18 +649,13 @@ impl Schedule {
                         // consensused; this is something that can validly happen in a real
                         // network, but causes problems with evaluating test results
                         for obs in &observations_made {
-                            pending.peers_make_observation(
-                                &mut env.rng,
-                                iter::once(&new_peer),
-                                step,
-                                obs,
-                            );
+                            pending.peers_make_observation(rng, iter::once(&new_peer), step, obs);
                         }
                     }
                     ObservationEvent::RemovePeer(peer) => {
                         peers.remove_peer(&peer);
                         pending.peers_make_observation(
-                            &mut env.rng,
+                            rng,
                             peers.active_peers(),
                             step,
                             &ParsecObservation::Remove(peer.clone()),
@@ -598,7 +665,7 @@ impl Schedule {
                     ObservationEvent::Opaque(payload) => {
                         let observation = ParsecObservation::OpaquePayload(payload);
                         pending.peers_make_observation(
-                            &mut env.rng,
+                            rng,
                             peers.active_peers(),
                             step,
                             &observation,
@@ -611,8 +678,8 @@ impl Schedule {
                     }
                 }
             }
-            Self::perform_step(
-                &mut env.rng,
+            Schedule::perform_step(
+                rng,
                 step,
                 &mut peers,
                 Some(&mut pending),
@@ -630,7 +697,7 @@ impl Schedule {
         let adjustment_coeff = 200.0;
         let additional_steps = (adjustment_coeff * n.ln() / options.prob_local_step) as usize;
         for _ in 0..additional_steps {
-            Self::perform_step(&mut env.rng, step, &mut peers, None, &mut schedule, options);
+            Schedule::perform_step(rng, step, &mut peers, None, &mut schedule, options);
             step += 1;
         }
 

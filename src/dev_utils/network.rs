@@ -76,7 +76,7 @@ impl Network {
         let genesis_group = all_ids.into_iter().collect::<BTreeSet<_>>();
         let peers = genesis_group
             .iter()
-            .map(|id| (id.clone(), Peer::new(id.clone(), &genesis_group)))
+            .map(|id| (id.clone(), Peer::from_genesis(id.clone(), &genesis_group)))
             .collect();
         Network {
             genesis: genesis_group,
@@ -95,6 +95,10 @@ impl Network {
         self.peers_with_status(PeerStatus::Active)
     }
 
+    fn active_peer_ids(&self) -> impl Iterator<Item = &PeerId> {
+        self.active_peers().map(|peer| peer.id())
+    }
+
     /// Returns true if all peers hold the same sequence of stable blocks.
     fn blocks_all_in_sequence(&self) -> Result<(), ConsensusError> {
         let first_peer = unwrap!(self.active_peers().next());
@@ -105,11 +109,11 @@ impl Network {
         {
             Err(ConsensusError::DifferingBlocksOrder {
                 order_1: BlocksOrder {
-                    peer: first_peer.id.clone(),
+                    peer: first_peer.id().clone(),
                     order: payloads.into_iter().cloned().collect(),
                 },
                 order_2: BlocksOrder {
-                    peer: peer.id.clone(),
+                    peer: peer.id().clone(),
                     order: peer.blocks_payloads().into_iter().cloned().collect(),
                 },
             })
@@ -146,28 +150,22 @@ impl Network {
             let _ = self.msg_queue.insert(peer.clone(), rest);
             for entry in to_handle {
                 match entry.message {
-                    Message::Request(req, resp_delay) => match self
-                        .peer_mut(peer)
-                        .parsec
-                        .handle_request(&entry.sender, req)
-                    {
-                        Ok(response) => {
-                            self.send_message(
-                                peer.clone(),
-                                &entry.sender,
-                                Message::Response(response),
-                                step + resp_delay,
-                            );
+                    Message::Request(req, resp_delay) => {
+                        match self.peer_mut(peer).handle_request(&entry.sender, req) {
+                            Ok(response) => {
+                                self.send_message(
+                                    peer.clone(),
+                                    &entry.sender,
+                                    Message::Response(response),
+                                    step + resp_delay,
+                                );
+                            }
+                            Err(Error::UnknownPeer) | Err(Error::InvalidPeerState { .. }) => (),
+                            Err(e) => panic!("{:?}", e),
                         }
-                        Err(Error::UnknownPeer) | Err(Error::InvalidPeerState { .. }) => (),
-                        Err(e) => panic!("{:?}", e),
-                    },
+                    }
                     Message::Response(resp) => {
-                        unwrap!(
-                            self.peer_mut(peer)
-                                .parsec
-                                .handle_response(&entry.sender, resp)
-                        );
+                        unwrap!(self.peer_mut(peer).handle_response(&entry.sender, resp));
                     }
                 }
             }
@@ -183,11 +181,11 @@ impl Network {
                         // old index exists and isn't equal to the new one
                         return Err(ConsensusError::DifferingBlocksOrder {
                             order_1: BlocksOrder {
-                                peer: peer.id.clone(),
+                                peer: peer.id().clone(),
                                 order: peer.blocks_payloads().into_iter().cloned().collect(),
                             },
                             order_2: BlocksOrder {
-                                peer: old_peer.id.clone(),
+                                peer: old_peer.id().clone(),
                                 order: old_peer.blocks_payloads().into_iter().cloned().collect(),
                             },
                         });
@@ -226,7 +224,7 @@ impl Network {
         let got = self
             .peers
             .values()
-            .map(|peer| (peer.id.clone(), peer.status))
+            .map(|peer| (peer.id().clone(), peer.status))
             .collect();
         if *expected_peers != got {
             return Err(ConsensusError::WrongPeers {
@@ -302,23 +300,25 @@ impl Network {
                 ScheduleEvent::Genesis(genesis_group) => {
                     let peers = genesis_group
                         .iter()
-                        .map(|id| (id.clone(), Peer::new(id.clone(), &genesis_group)))
+                        .map(|id| (id.clone(), Peer::from_genesis(id.clone(), &genesis_group)))
                         .collect();
                     self.peers = peers;
                     self.genesis = genesis_group;
                     // do a full reset while we're at it
                     self.msg_queue.clear();
                 }
-                ScheduleEvent::AddPeer(peer) => {
-                    let current_peers = self
-                        .peers
-                        .values()
-                        .filter(|peer| peer.status == PeerStatus::Active)
-                        .map(|peer| peer.id.clone())
-                        .collect();
+                ScheduleEvent::AddHonestPeer(peer) => {
+                    let current_peers = self.active_peer_ids().cloned().collect();
                     let _ = self.peers.insert(
                         peer.clone(),
-                        Peer::new_joining(peer.clone(), &current_peers, &self.genesis),
+                        Peer::honest(peer.clone(), &self.genesis, &current_peers),
+                    );
+                }
+                ScheduleEvent::AddMaliciousPeer(peer, schedule) => {
+                    let current_peers = self.active_peer_ids().cloned().collect();
+                    let _ = self.peers.insert(
+                        peer.clone(),
+                        Peer::malicious(peer.clone(), &self.genesis, &current_peers, schedule),
                     );
                 }
                 ScheduleEvent::RemovePeer(peer) => {
@@ -332,11 +332,11 @@ impl Network {
                     peer,
                     request_timing,
                 } => {
-                    self.peer_mut(&peer).make_votes();
+                    self.peer_mut(&peer).before_step(global_step);
                     self.handle_messages(&peer, global_step);
                     self.peer_mut(&peer).poll();
                     if let RequestTiming::DuringThisStep(req) = request_timing {
-                        match self.peer(&peer).parsec.create_gossip(Some(&req.recipient)) {
+                        match self.peer(&peer).create_gossip(&req.recipient) {
                             Ok(request) => {
                                 self.send_message(
                                     peer.clone(),

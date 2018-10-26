@@ -15,13 +15,12 @@
 //! ```
 //! scenarios
 //!     .add("parsec::functional_tests::my_test_function", |env| {
-//!         Schedule::new(
-//!             env,
-//!             &ScheduleOptions {
+//!         Schedule::build(env)
+//!             .with_options(&ScheduleOptions {
 //!                 genesis_size: 6,
 //!                 opaque_to_add: 1,
-//!             }
-//!         )
+//!             })
+//!             .finish()
 //!     })
 //!     .seed([1, 2, 3, 4])
 //!     .file("Alice", "alice.dot")
@@ -94,7 +93,7 @@ extern crate parsec;
 
 use clap::{App, Arg};
 use parsec::dev_utils::ObservationEvent::*;
-use parsec::dev_utils::{Environment, ObservationSchedule, RngChoice, Schedule, ScheduleOptions};
+use parsec::dev_utils::{Environment, RngChoice, Schedule};
 use parsec::mock::PeerId;
 use parsec::DIR;
 use std::collections::{BTreeMap, BTreeSet};
@@ -123,24 +122,22 @@ fn main() {
     let _ = scenarios.add(
         "parsec::functional_tests::handle_malice_genesis_event_not_after_initial",
         |env| {
-            let obs = ObservationSchedule {
-                genesis: peer_ids!("Alice", "Bob", "Carol", "Dave"),
-                schedule: vec![(0, Fail(PeerId::new("Dave")))],
-            };
-
-            Schedule::from_observation_schedule(env, &ScheduleOptions::default(), obs)
+            Schedule::build(env)
+                .with_observation_schedule(
+                    peer_ids!("Alice", "Bob", "Carol", "Dave"),
+                    vec![(0, Fail(PeerId::new("Dave")))],
+                ).finish()
         },
     );
 
     let _ = scenarios.add(
         "parsec::functional_tests::handle_malice_genesis_event_creator_not_genesis_member",
         |env| {
-            let obs = ObservationSchedule {
-                genesis: peer_ids!("Alice", "Bob", "Carol", "Dave"),
-                schedule: vec![(0, AddPeer(PeerId::new("Eric")))],
-            };
-
-            Schedule::from_observation_schedule(env, &ScheduleOptions::default(), obs)
+            Schedule::build(env)
+                .with_observation_schedule(
+                    peer_ids!("Alice", "Bob", "Carol", "Dave"),
+                    vec![(0, AddPeer(PeerId::new("Eric")))],
+                ).finish()
         },
     );
 

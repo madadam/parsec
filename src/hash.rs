@@ -29,6 +29,10 @@ impl Hash {
         }
         Ordering::Equal
     }
+
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.0
+    }
 }
 
 impl<'a> From<&'a [u8]> for Hash {

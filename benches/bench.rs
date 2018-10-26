@@ -63,7 +63,7 @@ extern crate parsec;
 use criterion::Criterion;
 
 #[cfg(feature = "testing")]
-use parsec::dev_utils::{Environment, RngChoice, Schedule, ScheduleOptions};
+use parsec::dev_utils::{Environment, RngChoice, Schedule};
 
 #[cfg(feature = "testing")]
 fn bench(c: &mut Criterion) {
@@ -71,7 +71,7 @@ fn bench(c: &mut Criterion) {
         b.iter_with_setup(
             || {
                 let mut env = Environment::new(RngChoice::SeededRandom);
-                let schedule = Schedule::new(&mut env, &ScheduleOptions::default());
+                let schedule = Schedule::build(&mut env).finish();
 
                 (env, schedule)
             },

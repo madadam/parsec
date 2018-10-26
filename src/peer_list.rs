@@ -334,6 +334,14 @@ impl<S: SecretId> PeerList<S> {
         self.peer_events(self.our_id.public_id())
     }
 
+    /// Hashes and indexes of our events in insertion order.
+    pub fn our_indexed_events(&self) -> impl DoubleEndedIterator<Item = (u64, &Hash)> {
+        self.peers
+            .get(self.our_id.public_id())
+            .into_iter()
+            .flat_map(|peer| peer.indexed_events())
+    }
+
     fn record_our_membership_list_change(&mut self, change: MembershipListChange<S::PublicId>) {
         if let Some(us) = self.peers.get_mut(self.our_id.public_id()) {
             us.record_membership_list_change(change)

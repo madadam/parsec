@@ -10,6 +10,7 @@
 #[cfg(test)]
 mod dot_parser;
 mod environment;
+mod malice;
 mod network;
 mod peer;
 pub mod proptest;

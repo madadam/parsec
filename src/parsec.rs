@@ -62,6 +62,11 @@ impl<T: NetworkEvent, S: SecretId> Parsec<T, S> {
         }
     }
 
+    /// Public id of this node.
+    pub fn our_pub_id(&self) -> &S::PublicId {
+        self.core.our_pub_id()
+    }
+
     /// Adds a vote for `observation`.  Returns an error if we have already voted for this.
     pub fn vote_for(&mut self, observation: Observation<T, S::PublicId>) -> Result<()> {
         debug!("{:?} voting for {:?}", self.our_pub_id(), observation);
@@ -160,11 +165,7 @@ impl<T: NetworkEvent, S: SecretId> Parsec<T, S> {
 
     /// Checks if the given `observation` has already been voted for by us.
     pub fn have_voted_for(&self, observation: &Observation<T, S::PublicId>) -> bool {
-        self.core.events().values().any(|event| {
-            event.creator() == self.our_pub_id() && event
-                .vote()
-                .map_or(false, |voted| voted.payload() == observation)
-        })
+        self.core.have_voted_for(observation)
     }
 
     /// Check if there are any observation that have been voted for but not yet consensused.
@@ -179,10 +180,6 @@ impl<T: NetworkEvent, S: SecretId> Parsec<T, S> {
     /// The observations are sorted first by the consensus order, then by the vote order.
     pub fn our_unpolled_observations(&self) -> impl Iterator<Item = &Observation<T, S::PublicId>> {
         self.core.our_unpolled_observations()
-    }
-
-    fn our_pub_id(&self) -> &S::PublicId {
-        self.core.our_pub_id()
     }
 
     fn confirm_peer_state(&self, peer_id: &S::PublicId, required: PeerState) -> Result<()> {
