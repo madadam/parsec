@@ -101,7 +101,7 @@ impl<T: NetworkEvent, S: SecretId> Parsec<T, S> {
             peer_id
         );
 
-        self.core.events_to_gossip(peer_id).map(Request::new)
+        Ok(Request::new(self.core.events_to_gossip(peer_id)))
     }
 
     /// Handles a received `Request` from `src` peer.  Returns a `Response` to be sent back to `src`
@@ -119,7 +119,8 @@ impl<T: NetworkEvent, S: SecretId> Parsec<T, S> {
         let forking_peers = self.unpack_and_add_events(src, req.packed_events)?;
         self.create_sync_event(src, true, &forking_peers)?;
         self.create_accusation_events()?;
-        self.core.events_to_gossip_to_peer(src).map(Response::new)
+
+        Ok(Response::new(self.core.events_to_gossip(Some(src))))
     }
 
     /// Handles a received `Response` from `src` peer.  Returns `Err` if the response was not valid
@@ -260,15 +261,7 @@ impl<T: NetworkEvent, S: SecretId> Parsec<T, S> {
         is_request: bool,
         forking_peers: &BTreeSet<S::PublicId>,
     ) -> Result<()> {
-        let self_parent = *self
-            .core
-            .peer_list()
-            .last_event(self.our_pub_id())
-            .ok_or_else(|| {
-                log_or_panic!("{:?} missing our own last event hash.", self.our_pub_id());
-                Error::Logic
-            })?;
-
+        let self_parent = self.core.our_last_event_hash();
         let other_parent = *self.core.peer_list().last_event(src).ok_or_else(|| {
             log_or_panic!("{:?} missing {:?} last event hash.", self.our_pub_id(), src);
             Error::Logic

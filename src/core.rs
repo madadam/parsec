@@ -254,53 +254,33 @@ impl<T: NetworkEvent, S: SecretId> Core<T, S> {
         &self.events
     }
 
-    /// Returns the events to be gossiped to a peer containing all gossip events this node thinks
-    /// that peer needs.  If `peer_id` is `None`, all known gossip events are returned.
-    pub fn events_to_gossip(
-        &self,
-        peer_id: Option<&S::PublicId>,
-    ) -> Result<Vec<&Event<T, S::PublicId>>> {
-        if let Some(recipient_id) = peer_id {
-            if self.peer_list.last_event(recipient_id).is_some() {
-                return self.events_to_gossip_to_peer(recipient_id);
+    /// Returns the events this node thinks that the peer with `peer_id` needs.  If `peer_id` is
+    /// `None`, all known gossip events are returned.
+    pub fn events_to_gossip(&self, peer_id: Option<&S::PublicId>) -> Vec<&Event<T, S::PublicId>> {
+        let last_event = peer_id
+            .and_then(|peer_id| self.peer_list.last_event(peer_id))
+            .and_then(|hash| self.get_known_event(hash).ok());
+
+        let mut events: Vec<_> = if let Some(last_event) = last_event {
+            // Events to include in the result. Initially start with including everything...
+            let mut inclusion_list = vec![true; self.events.len()];
+
+            // ...then exclude events that are ancestors of `last_event`, because the peer
+            // already has them.
+            for event in graph::ancestors(&self.events, last_event) {
+                inclusion_list[event.order()] = false;
             }
-        }
 
-        let mut events: Vec<_> = self.events.values().collect();
-        events.sort_by_key(|event| event.order());
-        Ok(events)
-    }
-
-    // Returns all the events we think `peer_id` doesn't yet know about.  We should already have
-    // checked that we know `peer_id` and that we have recorded at least one event from this peer
-    // before calling this function.
-    pub fn events_to_gossip_to_peer(
-        &self,
-        peer_id: &S::PublicId,
-    ) -> Result<Vec<&Event<T, S::PublicId>>> {
-        let last_event = if let Some(event_hash) = self.peer_list.last_event(peer_id) {
-            self.get_known_event(event_hash)?
+            self.events
+                .values()
+                .filter(|event| inclusion_list[event.order()])
+                .collect()
         } else {
-            log_or_panic!("{:?} doesn't have peer {:?}", self.our_pub_id(), peer_id);
-            return Err(Error::Logic);
+            self.events.values().collect()
         };
 
-        // Events to include in the result. Initially start with including everything...
-        let mut inclusion_list = vec![true; self.events.len()];
-
-        // ...then exclude events that are ancestors of `last_event`, because that are the events
-        // that the peer already has,
-        for event in graph::ancestors(&self.events, last_event) {
-            inclusion_list[event.order()] = false;
-        }
-
-        let mut events: Vec<_> = self
-            .events
-            .values()
-            .filter(|event| inclusion_list[event.order()])
-            .collect();
         events.sort_by_key(|event| event.order());
-        Ok(events)
+        events
     }
 
     /// Must only be used for events which have already been added to our graph.
