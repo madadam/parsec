@@ -21,6 +21,7 @@ pub(crate) use self::dot_parser::{
     parse_dot_file_with_test_name, parse_test_dot_file, ParsedContents,
 };
 pub use self::environment::{Environment, RngChoice};
+pub use self::malice::MaliceEvent;
 pub use self::network::Network;
 pub use self::peer::{Peer, PeerStatus, PeerStatuses};
 pub use self::schedule::*;

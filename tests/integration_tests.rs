@@ -65,7 +65,9 @@ extern crate unwrap;
 
 use maidsafe_utilities::log;
 use parsec::dev_utils::proptest::{arbitrary_delay, ScheduleOptionsStrategy, ScheduleStrategy};
-use parsec::dev_utils::{DelayDistribution, Environment, RngChoice, Schedule, ScheduleOptions};
+use parsec::dev_utils::{
+    DelayDistribution, Environment, MaliceEvent, RngChoice, Schedule, ScheduleOptions,
+};
 use parsec::mock::{PeerId, Transaction, NAMES};
 use proptest::prelude::ProptestConfig;
 use proptest::test_runner::FileFailurePersistence;
@@ -310,6 +312,37 @@ fn fail_add_remove() {
 
     let result = env.network.execute_schedule(schedule);
     assert!(result.is_ok(), "{:?}", result);
+}
+
+#[test]
+fn fork() {
+    use parsec::dev_utils::ObservationEvent::*;
+
+    let mut env = Environment::new(SEED);
+    let mut names = NAMES.iter();
+
+    let genesis = names.by_ref().take(4).cloned().map(PeerId::new).collect();
+    let malicious_peer = PeerId::new(unwrap!(names.next()));
+
+    let schedule = Schedule::build(&mut env)
+        .with_observation_schedule(
+            genesis,
+            vec![
+                (10, AddPeer(malicious_peer.clone())),
+                (100, Opaque(Transaction::new("one"))),
+                (200, Opaque(Transaction::new("two"))),
+                (300, Opaque(Transaction::new("three"))),
+            ],
+        ).with_malice_schedule(
+            malicious_peer,
+            vec![
+                (50, MaliceEvent::Fork),
+                (100, MaliceEvent::Fork),
+                (150, MaliceEvent::Fork),
+            ],
+        ).finish();
+
+    unwrap!(env.network.execute_schedule(schedule));
 }
 
 proptest! {

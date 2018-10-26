@@ -581,6 +581,13 @@ impl<T: NetworkEvent, S: SecretId> Parsec<T, S> {
     }
 
     fn create_accusation_event(&mut self, offender: S::PublicId, malice: Malice) -> Result<()> {
+        println!(
+            "{:?} accusing {:?} of {:?}",
+            self.our_pub_id(),
+            offender,
+            malice
+        );
+
         let event = Event::new_from_observation(
             self.core.our_last_event_hash(),
             Observation::Accusation { offender, malice },
