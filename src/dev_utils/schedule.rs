@@ -688,6 +688,7 @@ impl<'a, 'b> ScheduleBuilder<'a, 'b> {
             );
             step += 1;
         }
+
         let n = peers.present_peers().count() as f64;
         // Gossip should theoretically complete in O(log N) steps
         // But the number of local steps taken by each node depends on the probability

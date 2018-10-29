@@ -60,7 +60,7 @@ impl<T: NetworkEvent, P: PublicId> Event<T, P> {
         other_parent: Hash,
         events: &BTreeMap<Hash, Event<T, P>>,
         peer_list: &PeerList<S>,
-        forking_peers: &BTreeSet<S::PublicId>,
+        forking_peers: &BTreeSet<P>,
     ) -> Self {
         Self::new(
             Cause::Response {
@@ -218,6 +218,10 @@ impl<T: NetworkEvent, P: PublicId> Event<T, P> {
             format!("{:?}", self.content.creator),
             self.cache.index
         )
+    }
+
+    pub fn forking_peers(&self) -> &BTreeSet<P> {
+        &self.cache.forking_peers
     }
 
     fn new<S: SecretId<PublicId = P>>(

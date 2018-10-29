@@ -71,7 +71,7 @@ impl<T: NetworkEvent, S: SecretId> Parsec<T, S> {
     pub fn vote_for(&mut self, observation: Observation<T, S::PublicId>) -> Result<()> {
         debug!("{:?} voting for {:?}", self.our_pub_id(), observation);
 
-        self.confirm_self_state(PeerState::VOTE)?;
+        self.core.confirm_self_state(PeerState::VOTE)?;
 
         if self.have_voted_for(&observation) {
             return Err(Error::DuplicateVote);
@@ -91,13 +91,14 @@ impl<T: NetworkEvent, S: SecretId> Parsec<T, S> {
     /// returned.  If `peer_id` is `Some` and the given peer is not an active node, an error is
     /// returned.
     pub fn create_gossip(&self, peer_id: Option<&S::PublicId>) -> Result<Request<T, S::PublicId>> {
-        self.confirm_self_state(PeerState::SEND)?;
+        self.core.confirm_self_state(PeerState::SEND)?;
 
         if let Some(ref recipient_id) = peer_id {
             // We require `PeerState::VOTE` in addition to `PeerState::RECV` here, because if the
             // peer does not have `PeerState::VOTE`, it means we haven't yet reached consensus on
             // adding them to the section so we shouldn't contact them yet.
-            self.confirm_peer_state(recipient_id, PeerState::VOTE | PeerState::RECV)?;
+            self.core
+                .confirm_peer_state(recipient_id, PeerState::VOTE | PeerState::RECV)?;
         }
 
         debug!(
@@ -182,44 +183,13 @@ impl<T: NetworkEvent, S: SecretId> Parsec<T, S> {
         self.core.our_unpolled_observations()
     }
 
-    fn confirm_peer_state(&self, peer_id: &S::PublicId, required: PeerState) -> Result<()> {
-        let actual = self.core.peer_list().peer_state(peer_id);
-        if actual.contains(required) {
-            Ok(())
-        } else {
-            trace!(
-                "{:?} detected invalid state of {:?} (required: {:?}, actual: {:?})",
-                self.our_pub_id(),
-                peer_id,
-                required,
-                actual,
-            );
-            Err(Error::InvalidPeerState { required, actual })
-        }
-    }
-
-    fn confirm_self_state(&self, required: PeerState) -> Result<()> {
-        let actual = self.core.peer_list().our_state();
-        if actual.contains(required) {
-            Ok(())
-        } else {
-            trace!(
-                "{:?} has invalid state (required: {:?}, actual: {:?})",
-                self.our_pub_id(),
-                required,
-                actual,
-            );
-            Err(Error::InvalidSelfState { required, actual })
-        }
-    }
-
     fn unpack_and_add_events(
         &mut self,
         src: &S::PublicId,
         packed_events: Vec<PackedEvent<T, S::PublicId>>,
     ) -> Result<BTreeSet<S::PublicId>> {
-        self.confirm_self_state(PeerState::RECV)?;
-        self.confirm_peer_state(src, PeerState::SEND)?;
+        self.core.confirm_self_state(PeerState::RECV)?;
+        self.core.confirm_peer_state(src, PeerState::SEND)?;
 
         // We have received at least one gossip from the sender, so they can now receive gossips
         // from us as well.
@@ -441,10 +411,25 @@ impl<T: NetworkEvent, S: SecretId> Parsec<T, S> {
 
     // Detect whether the event incurs a fork.
     fn detect_fork(&mut self, event: &Event<T, S::PublicId>) {
-        if self.core.peer_list().last_event(event.creator()) != event.self_parent() {
-            if let Some(self_parent_hash) = event.self_parent() {
-                self.accuse(event.creator().clone(), Malice::Fork(*self_parent_hash));
+        {
+            let mut forks = self
+                .core
+                .peer_list()
+                .events_by_index(event.creator(), event.index());
+
+            if forks.next().is_none() {
+                // No other events at the same index - no fork.
+                return;
             }
+
+            if forks.next().is_some() {
+                // More than one event at the same index - fork already detected previously.
+                return;
+            }
+        }
+
+        if let Some(parent) = event.self_parent() {
+            self.accuse(event.creator().clone(), Malice::Fork(*parent))
         }
     }
 
@@ -512,10 +497,9 @@ impl<T: NetworkEvent, S: SecretId> Parsec<T, S> {
                 return;
             };
 
-            let parent = if let Some(parent) = self.core.self_parent(event) {
+            let other_parent = if let Some(parent) = self.core.other_parent(event) {
                 parent
             } else {
-                // Must be the initial event, so there is nothing to detect.
                 return;
             };
 
@@ -530,30 +514,10 @@ impl<T: NetworkEvent, S: SecretId> Parsec<T, S> {
                 return;
             };
 
-            // Find an event X created by someone that the creator of `event` should not know about,
-            // where X is seen by `event` but not seen by `event`'s parent. If there is such an
-            // event, we raise the accusation.
-            //
-            // The reason why we filter out events seen by the parent is to prevent spamming
-            // accusations of the same malice.
-            let detected =
-                self.core
-                    .peer_list()
-                    .all_ids()
-                    .filter(|peer_id| !membership_list.contains(peer_id))
-                    .filter_map(|peer_id| {
-                        event
-                            .last_ancestors()
-                            .get(peer_id)
-                            .map(|index| (peer_id, *index))
-                    }).flat_map(|(peer_id, index)| {
-                        self.core.peer_list().events_by_index(peer_id, index)
-                    }).filter_map(|hash| self.core.get_known_event(hash).ok())
-                    .any(|invalid_event| !parent.is_descendant_of(invalid_event));
-            if detected {
-                Some(event.creator().clone())
-            } else {
+            if membership_list.contains(other_parent.creator()) {
                 None
+            } else {
+                Some(event.creator().clone())
             }
         };
 
@@ -581,19 +545,13 @@ impl<T: NetworkEvent, S: SecretId> Parsec<T, S> {
     }
 
     fn create_accusation_event(&mut self, offender: S::PublicId, malice: Malice) -> Result<()> {
-        println!(
-            "{:?} accusing {:?} of {:?}",
-            self.our_pub_id(),
-            offender,
-            malice
-        );
-
         let event = Event::new_from_observation(
             self.core.our_last_event_hash(),
             Observation::Accusation { offender, malice },
             self.core.events(),
             self.core.peer_list(),
         );
+
         self.add_event(event)
     }
 
@@ -625,6 +583,7 @@ mod functional_tests {
     use gossip::{find_event_by_short_name, Event};
     use mock::{self, Transaction};
     use peer_list::{PeerList, PeerState};
+    use std::collections::BTreeSet;
 
     fn snapshot(parsec: &Parsec<Transaction, PeerId>) -> Snapshot {
         Snapshot::new(&parsec.core)

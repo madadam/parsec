@@ -16,6 +16,7 @@ use gossip::{Request, Response};
 use hash::Hash;
 use mock::{PeerId, Transaction};
 use observation::Observation;
+use peer_list::PeerState;
 use rand::{Rng, SeedableRng, XorShiftRng};
 use serialise;
 use std::collections::BTreeSet;
@@ -33,6 +34,7 @@ pub struct MaliciousParsec {
     core: Core<Transaction, PeerId>,
     scheduled_malice: Vec<(usize, MaliceEvent)>,
     next_malice: Option<MaliceEvent>,
+    did_commit_malice: bool,
 }
 
 impl MaliciousParsec {
@@ -49,6 +51,7 @@ impl MaliciousParsec {
             core: Core::from_existing(our_id, genesis_group, section, core::is_supermajority),
             scheduled_malice,
             next_malice: None,
+            did_commit_malice: false,
         }
     }
 
@@ -57,6 +60,10 @@ impl MaliciousParsec {
     }
 
     pub fn vote_for(&mut self, observation: Observation<Transaction, PeerId>) -> Result<()> {
+        // println!("{:?} voting for {:?}", self.our_pub_id(), observation);
+
+        self.core.confirm_self_state(PeerState::VOTE)?;
+
         let self_parent_hash = self.self_parent_for_next_event(&observation.create_hash());
         let event = Event::new_from_observation(
             self_parent_hash,
@@ -64,7 +71,8 @@ impl MaliciousParsec {
             self.core.events(),
             self.core.peer_list(),
         );
-        self.core.add_event(event)
+
+        self.add_our_event(event)
     }
 
     pub fn have_voted_for(&self, observation: &Observation<Transaction, PeerId>) -> bool {
@@ -72,6 +80,18 @@ impl MaliciousParsec {
     }
 
     pub fn create_gossip(&self, peer_id: Option<&PeerId>) -> Result<Request<Transaction, PeerId>> {
+        self.core.confirm_self_state(PeerState::SEND)?;
+        if let Some(peer_id) = peer_id {
+            self.core
+                .confirm_peer_state(peer_id, PeerState::VOTE | PeerState::RECV)?;
+        }
+
+        // println!(
+        //     "{:?} creating gossip request for {:?}",
+        //     self.our_pub_id(),
+        //     peer_id
+        // );
+
         Ok(Request::new(self.core.events_to_gossip(peer_id)))
     }
 
@@ -80,8 +100,14 @@ impl MaliciousParsec {
         src: &PeerId,
         req: Request<Transaction, PeerId>,
     ) -> Result<Response<Transaction, PeerId>> {
+        // println!(
+        //     "{:?} received gossip request from {:?}",
+        //     self.our_pub_id(),
+        //     src
+        // );
+
         let seed = Hash::from(serialise(&req).as_ref());
-        let forking_peers = self.unpack_and_add_events(req.packed_events)?;
+        let forking_peers = self.unpack_and_add_events(src, req.packed_events)?;
         self.create_sync_event(src, true, &forking_peers, &seed)?;
 
         Ok(Response::new(self.core.events_to_gossip(Some(src))))
@@ -92,8 +118,14 @@ impl MaliciousParsec {
         src: &PeerId,
         res: Response<Transaction, PeerId>,
     ) -> Result<()> {
+        // println!(
+        //     "{:?} received gossip response from {:?}",
+        //     self.our_pub_id(),
+        //     src
+        // );
+
         let seed = Hash::from(serialise(&res).as_ref());
-        let forking_peers = self.unpack_and_add_events(res.packed_events)?;
+        let forking_peers = self.unpack_and_add_events(src, res.packed_events)?;
         self.create_sync_event(src, false, &forking_peers, &seed)
     }
 
@@ -112,10 +144,19 @@ impl MaliciousParsec {
         }
     }
 
+    pub fn did_commit_malice(&self) -> bool {
+        self.did_commit_malice
+    }
+
     fn unpack_and_add_events(
         &mut self,
+        src: &PeerId,
         packed_events: Vec<PackedEvent<Transaction, PeerId>>,
     ) -> Result<BTreeSet<PeerId>> {
+        self.core.confirm_self_state(PeerState::RECV)?;
+        self.core.confirm_peer_state(src, PeerState::SEND)?;
+        self.core.change_peer_state(src, PeerState::RECV);
+
         let mut forking_peers = BTreeSet::new();
         for packed_event in packed_events {
             if let Some(event) = self.core.unpack_event(packed_event, &mut forking_peers)? {
@@ -159,7 +200,7 @@ impl MaliciousParsec {
             )
         };
 
-        self.core.add_event(event)
+        self.add_our_event(event)
     }
 
     // Pick self-parent for the next event we create. Cause fork or other type of malice if
@@ -169,30 +210,23 @@ impl MaliciousParsec {
 
         // First pick the index of the self-parent. If we have fork scheduled, pick a random one
         // between 0 (inclusive) and the last index (exclusive). Otherwise pick the last index.
-        let (index, fork) = {
+        let index = {
             let mut indices = self
                 .core
                 .peer_list()
                 .our_indexed_events()
+                .rev()
                 .map(|(index, _)| index);
 
             if let Some(MaliceEvent::Fork) = self.next_malice {
-                let candidates: Vec<_> = indices.rev().skip(1).collect();
-                (rng.choose(&candidates).cloned(), true)
+                let candidates: Vec<_> = indices.skip(1).collect();
+                rng.choose(&candidates).cloned()
             } else {
-                (indices.next(), false)
+                indices.next()
             }
         };
 
-        let index = if let Some(index) = index {
-            if fork {
-                self.next_malice = None;
-            }
-
-            index
-        } else {
-            0
-        };
+        let index = if let Some(index) = index { index } else { 0 };
 
         // Then if there are multiple events at the index (because of previous fork), randomly pick
         // one.
@@ -207,6 +241,25 @@ impl MaliciousParsec {
             "{:?} has no events to pick self-parent from",
             self.our_pub_id()
         )
+    }
+
+    fn add_our_event(&mut self, event: Event<Transaction, PeerId>) -> Result<()> {
+        if self.core.has_event(event.hash()) {
+            return Ok(());
+        }
+
+        // Check malice
+        let fork = self
+            .core
+            .peer_list()
+            .last_events(self.our_pub_id())
+            .all(|hash| event.self_parent() != Some(hash));
+        if fork {
+            self.next_malice = None;
+            self.did_commit_malice = true;
+        }
+
+        self.core.add_event(event)
     }
 }
 

@@ -273,6 +273,21 @@ impl<S: SecretId> PeerList<S> {
         }
     }
 
+    /// Returns an iterator over the last events created by this peer. The iterator yields more than
+    /// one event only in case of fork.
+    pub fn last_events(&self, peer_id: &S::PublicId) -> impl Iterator<Item = &Hash> {
+        self.peers.get(peer_id).into_iter().flat_map(|peer| {
+            let index = peer
+                .indexed_events()
+                .rev()
+                .map(|(index, _)| index)
+                .next()
+                .unwrap_or(0);
+
+            peer.events_by_index(index)
+        })
+    }
+
     /// Returns the hash of the last event created by this peer. Returns `None` if cannot find.
     pub fn last_event(&self, peer_id: &S::PublicId) -> Option<&Hash> {
         self.peers
@@ -292,6 +307,19 @@ impl<S: SecretId> PeerList<S> {
             .flat_map(move |peer| peer.events_by_index(index))
     }
 
+    /// Returns the event at the given index, if there is only one. In case of fork, returns `None`.
+    pub fn unique_event_by_index(&self, peer_id: &S::PublicId, index: u64) -> Option<&Hash> {
+        let mut hashes = self.events_by_index(peer_id, index);
+        let hash = hashes.next()?;
+
+        if hashes.next().is_some() {
+            // Fork
+            None
+        } else {
+            Some(hash)
+        }
+    }
+
     /// Adds event created by the peer. Returns an error if the creator is not known, or if we
     /// already held an event from this peer with this index, but that event's hash is different to
     /// the one being added (in which case `peers` is left unmodified).
@@ -300,12 +328,6 @@ impl<S: SecretId> PeerList<S> {
         event: &Event<T, S::PublicId>,
     ) -> Result<(), Error> {
         if let Some(peer) = self.peers.get_mut(event.creator()) {
-            if *event.creator() != *self.our_id.public_id() && !peer.state.can_send() {
-                return Err(Error::InvalidPeerState {
-                    required: PeerState::SEND,
-                    actual: peer.state,
-                });
-            }
             peer.add_event(event.index(), *event.hash());
             Ok(())
         } else {

@@ -303,9 +303,9 @@ impl<T: NetworkEvent, P: PublicId> MetaElections<T, P> {
             if entry.get().undecided_voters.is_empty() {
                 let _ = entry.remove();
             }
-        } else {
-            Self::not_found(handle)
         }
+
+        // It's not an error to call this function on a meta-election that's already been removed.
     }
 
     pub fn handle_peer_removed(&mut self, peer_id: &P) {

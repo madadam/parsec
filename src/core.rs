@@ -370,6 +370,37 @@ impl<T: NetworkEvent, S: SecretId> Core<T, S> {
         &self.peer_list
     }
 
+    pub fn confirm_peer_state(&self, peer_id: &S::PublicId, required: PeerState) -> Result<()> {
+        let actual = self.peer_list.peer_state(peer_id);
+        if actual.contains(required) {
+            Ok(())
+        } else {
+            trace!(
+                "{:?} detected invalid state of {:?} (required: {:?}, actual: {:?})",
+                self.our_pub_id(),
+                peer_id,
+                required,
+                actual,
+            );
+            Err(Error::InvalidPeerState { required, actual })
+        }
+    }
+
+    pub fn confirm_self_state(&self, required: PeerState) -> Result<()> {
+        let actual = self.peer_list.our_state();
+        if actual.contains(required) {
+            Ok(())
+        } else {
+            trace!(
+                "{:?} has invalid state (required: {:?}, actual: {:?})",
+                self.our_pub_id(),
+                required,
+                actual,
+            );
+            Err(Error::InvalidSelfState { required, actual })
+        }
+    }
+
     pub fn change_peer_state(&mut self, peer_id: &S::PublicId, state: PeerState) {
         self.peer_list.change_peer_state(peer_id, state);
     }
@@ -417,6 +448,14 @@ impl<T: NetworkEvent, S: SecretId> Core<T, S> {
     }
 
     fn process_event(&mut self, event_hash: &Hash) -> Result<()> {
+        // let short_name = self.get_known_event(event_hash).unwrap().short_name();
+        // println!("{:?} processing {:?}", self.our_pub_id(), short_name);
+
+        // Skip processing if we've been removed.
+        if self.peer_list.our_state() == PeerState::inactive() {
+            return Ok(());
+        }
+
         let elections: Vec<_> = self.meta_elections.all().collect();
         for election in elections {
             self.advance_meta_election(election, event_hash)?;
@@ -425,12 +464,19 @@ impl<T: NetworkEvent, S: SecretId> Core<T, S> {
         let creator = self.get_known_event(event_hash)?.creator().clone();
 
         if let Some(payload) = self.compute_consensus(MetaElectionHandle::CURRENT, event_hash) {
+            // println!(
+            //     "{:?} SELF-CONSENSUS on {:?} in {:?}",
+            //     self.our_pub_id(),
+            //     payload,
+            //     short_name,
+            // );
+
             self.output_consensus_info(&payload);
 
-            let restart = self.handle_self_consensus(&payload) == PostConsensusAction::Continue;
-            if creator != *self.our_pub_id() {
-                self.handle_peer_consensus(&creator, &payload);
-            }
+            self.handle_self_consensus(&payload);
+
+            let peer_consensus = creator != *self.our_pub_id()
+                && self.meta_elections.undecided_by(&creator).next().is_none();
 
             let prev_election = self.meta_elections.new_election(
                 payload.clone(),
@@ -439,21 +485,34 @@ impl<T: NetworkEvent, S: SecretId> Core<T, S> {
 
             self.meta_elections
                 .mark_as_decided(prev_election, self.peer_list.our_pub_id());
-            self.meta_elections.mark_as_decided(prev_election, &creator);
+
+            if peer_consensus {
+                self.meta_elections.mark_as_decided(prev_election, &creator);
+                self.handle_peer_consensus(&creator, &payload);
+            }
 
             let block = self.create_block(payload.clone())?;
             self.consensused_blocks.push_back(block);
             self.mark_observation_as_consensused(&payload);
+            self.restart_consensus();
+        }
 
-            if restart {
-                self.restart_consensus();
-            }
-        } else if creator != *self.our_pub_id() {
-            let undecided: Vec<_> = self.meta_elections.undecided_by(&creator).collect();
-            for election in undecided {
+        if creator != *self.our_pub_id() {
+            let elections: Vec<_> = self.meta_elections.undecided_by(&creator).collect();
+            for election in elections {
                 if let Some(payload) = self.compute_consensus(election, event_hash) {
+                    // println!(
+                    //     "{:?} PEER-CONSENSUS by {:?} on {:?} in {:?}",
+                    //     self.our_pub_id(),
+                    //     creator,
+                    //     payload,
+                    //     short_name,
+                    // );
+
                     self.meta_elections.mark_as_decided(election, &creator);
                     self.handle_peer_consensus(&creator, &payload);
+                } else {
+                    break;
                 }
             }
         }
@@ -475,7 +534,7 @@ impl<T: NetworkEvent, S: SecretId> Core<T, S> {
             info!(
                 "{:?} got consensus on block {} with payload {:?} and payload hash {:?}",
                 self.our_pub_id(),
-                self.meta_elections.consensus_history().len() - 1,
+                self.meta_elections.consensus_history().len(),
                 payload,
                 payload.create_hash()
             )
@@ -496,10 +555,7 @@ impl<T: NetworkEvent, S: SecretId> Core<T, S> {
     }
 
     /// Handles consensus reached by us.
-    fn handle_self_consensus(
-        &mut self,
-        observation: &Observation<T, S::PublicId>,
-    ) -> PostConsensusAction {
+    fn handle_self_consensus(&mut self, observation: &Observation<T, S::PublicId>) {
         match *observation {
             Observation::Add(ref peer_id) => self.handle_add_peer(peer_id),
             Observation::Remove(ref peer_id) => self.handle_remove_peer(peer_id),
@@ -516,13 +572,11 @@ impl<T: NetworkEvent, S: SecretId> Core<T, S> {
 
                 self.handle_remove_peer(offender)
             }
-            Observation::Genesis(_) | Observation::OpaquePayload(_) => {
-                PostConsensusAction::Continue
-            }
+            Observation::Genesis(_) | Observation::OpaquePayload(_) => (),
         }
     }
 
-    fn handle_add_peer(&mut self, peer_id: &S::PublicId) -> PostConsensusAction {
+    fn handle_add_peer(&mut self, peer_id: &S::PublicId) {
         // - If we are already full member of the section, we can start sending gossips to
         //   the new peer from this moment.
         // - If we are the new peer, we must wait for the other members to send gossips to
@@ -557,19 +611,11 @@ impl<T: NetworkEvent, S: SecretId> Core<T, S> {
         } else {
             self.peer_list.add_peer(peer_id.clone(), state);
         }
-
-        PostConsensusAction::Continue
     }
 
-    fn handle_remove_peer(&mut self, peer_id: &S::PublicId) -> PostConsensusAction {
+    fn handle_remove_peer(&mut self, peer_id: &S::PublicId) {
         self.peer_list.remove_peer(peer_id);
         self.meta_elections.handle_peer_removed(peer_id);
-
-        if *peer_id == *self.our_pub_id() {
-            PostConsensusAction::Stop
-        } else {
-            PostConsensusAction::Continue
-        }
     }
 
     // Handle consensus reached by other peer.
@@ -762,6 +808,7 @@ impl<T: NetworkEvent, S: SecretId> Core<T, S> {
                         &parent_event_votes,
                         builder.event(),
                     )?;
+
                     MetaVote::next(
                         &parent_event_votes,
                         &other_votes,
@@ -819,8 +866,8 @@ impl<T: NetworkEvent, S: SecretId> Core<T, S> {
             return false;
         };
 
-        // If self-parent is initial, we don't have to check it's meta-event, as we already know it
-        // can not have any observations. Also, we don't assign meta-events to initial events anyway.
+        // If self-parent is initial, we don't have to check its meta-event, as we already know it
+        // can not have any observees. Also, we don't assign meta-events to initial events anyway.
         if self_parent.is_initial() {
             return true;
         }
@@ -1002,22 +1049,17 @@ impl<T: NetworkEvent, S: SecretId> Core<T, S> {
         round: usize,
         step: &Step,
     ) -> Vec<MetaVote> {
-        let mut events = self.peer_list.events_by_index(creator, creator_event_index);
-
-        // Check whether it has at least one item
-        let event = if let Some(event) = events.next() {
-            event
+        let hash = if let Some(hash) = self
+            .peer_list
+            .unique_event_by_index(creator, creator_event_index)
+        {
+            hash
         } else {
             return vec![];
         };
 
-        if events.next().is_some() {
-            // Fork
-            return vec![];
-        }
-
         self.meta_elections
-            .meta_votes(election, event)
+            .meta_votes(election, hash)
             .and_then(|meta_votes| meta_votes.get(peer_id))
             .map(|meta_votes| {
                 meta_votes
@@ -1129,7 +1171,6 @@ impl<T: NetworkEvent, S: SecretId> Core<T, S> {
         event_hash: &Hash,
     ) -> Option<Observation<T, S::PublicId>> {
         let last_meta_votes = self.meta_elections.meta_votes(election, event_hash)?;
-
         let decided_meta_votes = last_meta_votes.iter().filter_map(|(id, event_votes)| {
             event_votes.last().and_then(|v| v.decision).map(|v| (id, v))
         });
@@ -1300,12 +1341,6 @@ impl Core<Transaction, PeerId> {
 pub(crate) struct ObservationInfo {
     pub consensused: bool,
     pub created_by_us: bool,
-}
-
-#[derive(PartialEq, Eq)]
-enum PostConsensusAction {
-    Continue,
-    Stop,
 }
 
 // Initialise membership lists of all peers.

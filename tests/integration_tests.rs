@@ -315,6 +315,7 @@ fn fail_add_remove() {
 }
 
 #[test]
+#[ignore]
 fn fork() {
     use parsec::dev_utils::ObservationEvent::*;
 
@@ -346,7 +347,8 @@ fn fork() {
             ],
         ).finish();
 
-    unwrap!(env.network.execute_schedule(schedule));
+    let result = env.network.execute_schedule(schedule);
+    assert!(result.is_ok(), "{:?}", result);
 }
 
 proptest! {

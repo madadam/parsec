@@ -64,7 +64,6 @@ pub enum ConsensusError {
         signatures: BTreeSet<PeerId>,
     },
     MaliciousPeerNotAccused(PeerId),
-    MaliciousPeerNotRemoved(PeerId),
     HonestPeerAccused(PeerId),
 }
 
@@ -88,26 +87,25 @@ impl Network {
         }
     }
 
-    fn peers_with_status(&self, status: PeerStatus) -> impl Iterator<Item = &Peer> {
+    fn active_honest_peers(&self) -> impl Iterator<Item = &Peer> {
         self.peers
             .values()
-            .filter(move |&peer| peer.status == status)
-    }
-
-    fn active_peers(&self) -> impl Iterator<Item = &Peer> {
-        self.peers_with_status(PeerStatus::Active)
+            .filter(|peer| !peer.is_malicious() && peer.status == PeerStatus::Active)
     }
 
     fn active_peer_ids(&self) -> impl Iterator<Item = &PeerId> {
-        self.active_peers().map(|peer| peer.id())
+        self.peers
+            .values()
+            .filter(|peer| peer.status == PeerStatus::Active)
+            .map(|peer| peer.id())
     }
 
     /// Returns true if all peers hold the same sequence of stable blocks.
     fn blocks_all_in_sequence(&self) -> Result<(), ConsensusError> {
-        let first_peer = unwrap!(self.active_peers().next());
+        let first_peer = unwrap!(self.active_honest_peers().next());
         let payloads = first_peer.blocks_payloads();
         if let Some(peer) = self
-            .active_peers()
+            .active_honest_peers()
             .find(|peer| peer.blocks_payloads() != payloads)
         {
             Err(ConsensusError::DifferingBlocksOrder {
@@ -163,12 +161,25 @@ impl Network {
                                     step + resp_delay,
                                 );
                             }
-                            Err(Error::UnknownPeer) | Err(Error::InvalidPeerState { .. }) => (),
-                            Err(e) => panic!("{:?}", e),
+                            Err(Error::UnknownPeer)
+                            | Err(Error::InvalidPeerState { .. })
+                            | Err(Error::InvalidSelfState { .. }) => (),
+                            Err(error) => panic!(
+                                "{:?} failed to handle request from {:?}: {:?}",
+                                peer, entry.sender, error
+                            ),
                         }
                     }
                     Message::Response(resp) => {
-                        unwrap!(self.peer_mut(peer).handle_response(&entry.sender, resp));
+                        match self.peer_mut(peer).handle_response(&entry.sender, resp) {
+                            Ok(_)
+                            | Err(Error::InvalidPeerState { .. })
+                            | Err(Error::InvalidSelfState { .. }) => (),
+                            Err(error) => panic!(
+                                "{:?} failed to handle response from {:?}: {:?}",
+                                peer, entry.sender, error
+                            ),
+                        }
                     }
                 }
             }
@@ -177,7 +188,7 @@ impl Network {
 
     fn check_consensus_broken(&self) -> Result<(), ConsensusError> {
         let mut block_order = BTreeMap::new();
-        for peer in self.active_peers() {
+        for peer in self.active_honest_peers() {
             for (index, block) in peer.blocks_payloads().into_iter().enumerate() {
                 if let Some((old_peer, old_index)) = block_order.insert(block, (peer, index)) {
                     if old_index != index {
@@ -206,6 +217,7 @@ impl Network {
     ) -> bool {
         self.check_consensus(expected_peers, num_expected_observations)
             .is_ok()
+            && self.check_accusations().is_ok()
     }
 
     /// Checks whether there is a right number of blocks and the blocks are in an agreeing order
@@ -215,7 +227,15 @@ impl Network {
         num_expected_observations: usize,
     ) -> Result<(), ConsensusError> {
         // Check the number of consensused blocks.
-        let got = unwrap!(self.active_peers().next()).blocks_payloads().len();
+        // Skip accusations, because we can't predict in advance how many of those will be raised.
+        let got = unwrap!(self.active_honest_peers().next())
+            .blocks_payloads()
+            .iter()
+            .filter(|payload| match *payload {
+                ParsecObservation::Accusation { .. } => false,
+                _ => true,
+            }).count();
+
         if num_expected_observations != got {
             return Err(ConsensusError::WrongBlocksNumber {
                 expected: num_expected_observations,
@@ -266,7 +286,7 @@ impl Network {
 
     /// Checks if the blocks are only signed by valid voters
     fn check_blocks_signatories(&self) -> Result<(), ConsensusError> {
-        let blocks = self.active_peers().next().unwrap().blocks();
+        let blocks = self.active_honest_peers().next().unwrap().blocks();
         let mut valid_voters = BTreeSet::new();
         for block in blocks {
             match *block.payload() {
@@ -291,12 +311,11 @@ impl Network {
         Ok(())
     }
 
-    /// Checks that all malicious nodes have been accused and removed from the network and that none
-    /// of the honest node were accused.
+    /// Checks that all malicious nodes have been accused and that no honest node has.
     fn check_accusations(&self) -> Result<(), ConsensusError> {
         let offenders = self
-            .active_peers()
-            .find(|peer| !peer.is_malicious())
+            .active_honest_peers()
+            .next()
             .map(|peer| {
                 peer.blocks_payloads()
                     .iter()
@@ -307,13 +326,9 @@ impl Network {
             }).unwrap_or_else(BTreeSet::new);
 
         for (peer_id, peer) in &self.peers {
-            if peer.is_malicious() {
+            if peer.did_commit_malice() {
                 if !offenders.contains(peer_id) {
                     return Err(ConsensusError::MaliciousPeerNotAccused(peer_id.clone()));
-                }
-
-                if peer.status != PeerStatus::Removed {
-                    return Err(ConsensusError::MaliciousPeerNotRemoved(peer_id.clone()));
                 }
             } else if offenders.contains(peer_id) {
                 return Err(ConsensusError::HonestPeerAccused(peer_id.clone()));
@@ -395,6 +410,7 @@ impl Network {
                 break;
             }
         }
+
         self.check_consensus(&peers, num_observations)?;
         self.check_blocks_signatories()?;
         self.check_accusations()

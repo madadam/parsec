@@ -118,7 +118,7 @@ impl Peer {
             };
 
             if let Some(block) = block {
-                self.make_active_if_added(&block);
+                self.handle_consensus(&block);
                 self.blocks.push(block);
             } else {
                 break;
@@ -165,21 +165,30 @@ impl Peer {
         self.blocks.iter().map(Block::payload).collect()
     }
 
+    /// Is the peer malicious?
     pub fn is_malicious(&self) -> bool {
-        // TODO: this should return `true` only if the peer actually committed malice.
         match self.personality {
             Personality::Honest(_) => false,
             Personality::Malicious(_) => true,
         }
     }
 
-    fn make_active_if_added(&mut self, block: &Block<Transaction, PeerId>) {
-        if self.status == PeerStatus::Pending {
-            if let ParsecObservation::Add(ref peer) = *block.payload() {
-                if self.id() == peer {
+    /// Did this peer actually commit a malice?
+    pub fn did_commit_malice(&self) -> bool {
+        match self.personality {
+            Personality::Honest(_) => false,
+            Personality::Malicious(ref p) => p.did_commit_malice(),
+        }
+    }
+
+    fn handle_consensus(&mut self, block: &Block<Transaction, PeerId>) {
+        match *block.payload() {
+            ParsecObservation::Add(ref peer) if peer == self.id() => {
+                if self.status == PeerStatus::Pending {
                     self.status = PeerStatus::Active;
                 }
             }
+            _ => (),
         }
     }
 }
