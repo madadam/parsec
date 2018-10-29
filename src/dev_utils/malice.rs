@@ -19,7 +19,6 @@ use observation::Observation;
 use rand::{Rng, SeedableRng, XorShiftRng};
 use serialise;
 use std::collections::BTreeSet;
-use std::mem;
 use std::usize;
 
 /// Scheduled malicious event.
@@ -213,20 +212,15 @@ impl MaliciousParsec {
 
 // Create a random number generator seeded using the given hash.
 fn create_rng(seed: &Hash) -> XorShiftRng {
-    let seed = [
-        u32_from_bytes(&seed.as_bytes()[0..4]),
-        u32_from_bytes(&seed.as_bytes()[4..8]),
-        u32_from_bytes(&seed.as_bytes()[8..12]),
-        u32_from_bytes(&seed.as_bytes()[12..16]),
-    ];
-
-    XorShiftRng::from_seed(seed)
+    let bytes = seed.as_bytes();
+    XorShiftRng::from_seed([
+        u32_from_bytes(bytes[0], bytes[1], bytes[2], bytes[3]),
+        u32_from_bytes(bytes[4], bytes[5], bytes[6], bytes[7]),
+        u32_from_bytes(bytes[8], bytes[9], bytes[10], bytes[11]),
+        u32_from_bytes(bytes[12], bytes[13], bytes[14], bytes[15]),
+    ])
 }
 
-#[allow(unsafe_code)]
-#[cfg_attr(feature = "cargo-clippy", allow(cast_ptr_alignment))]
-fn u32_from_bytes(bytes: &[u8]) -> u32 {
-    assert!(bytes.len() >= mem::size_of::<u32>());
-    let ptr: *const _ = &bytes[0];
-    unsafe { *(ptr as *const _) }
+fn u32_from_bytes(b0: u8, b1: u8, b2: u8, b3: u8) -> u32 {
+    (u32::from(b0) << 24) | (u32::from(b1) << 16) | (u32::from(b2) << 8) | u32::from(b3)
 }

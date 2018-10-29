@@ -165,6 +165,14 @@ impl Peer {
         self.blocks.iter().map(Block::payload).collect()
     }
 
+    pub fn is_malicious(&self) -> bool {
+        // TODO: this should return `true` only if the peer actually committed malice.
+        match self.personality {
+            Personality::Honest(_) => false,
+            Personality::Malicious(_) => true,
+        }
+    }
+
     fn make_active_if_added(&mut self, block: &Block<Transaction, PeerId>) {
         if self.status == PeerStatus::Pending {
             if let ParsecObservation::Add(ref peer) = *block.payload() {

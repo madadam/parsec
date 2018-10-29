@@ -63,6 +63,9 @@ pub enum ConsensusError {
         observation: Observation,
         signatures: BTreeSet<PeerId>,
     },
+    MaliciousPeerNotAccused(PeerId),
+    MaliciousPeerNotRemoved(PeerId),
+    HonestPeerAccused(PeerId),
 }
 
 impl Network {
@@ -288,6 +291,38 @@ impl Network {
         Ok(())
     }
 
+    /// Checks that all malicious nodes have been accused and removed from the network and that none
+    /// of the honest node were accused.
+    fn check_accusations(&self) -> Result<(), ConsensusError> {
+        let offenders = self
+            .active_peers()
+            .find(|peer| !peer.is_malicious())
+            .map(|peer| {
+                peer.blocks_payloads()
+                    .iter()
+                    .filter_map(|payload| match payload {
+                        ParsecObservation::Accusation { offender, .. } => Some(offender.clone()),
+                        _ => None,
+                    }).collect()
+            }).unwrap_or_else(BTreeSet::new);
+
+        for (peer_id, peer) in &self.peers {
+            if peer.is_malicious() {
+                if !offenders.contains(peer_id) {
+                    return Err(ConsensusError::MaliciousPeerNotAccused(peer_id.clone()));
+                }
+
+                if peer.status != PeerStatus::Removed {
+                    return Err(ConsensusError::MaliciousPeerNotRemoved(peer_id.clone()));
+                }
+            } else if offenders.contains(peer_id) {
+                return Err(ConsensusError::HonestPeerAccused(peer_id.clone()));
+            }
+        }
+
+        Ok(())
+    }
+
     /// Simulates the network according to the given schedule
     pub fn execute_schedule(&mut self, schedule: Schedule) -> Result<(), ConsensusError> {
         let Schedule {
@@ -361,6 +396,7 @@ impl Network {
             }
         }
         self.check_consensus(&peers, num_observations)?;
-        self.check_blocks_signatories()
+        self.check_blocks_signatories()?;
+        self.check_accusations()
     }
 }
