@@ -1580,6 +1580,11 @@ impl<T: NetworkEvent, S: SecretId> Parsec<T, S> {
     }
 
     fn detect_invalid_accusation(&mut self, event: &Event<T, S::PublicId>) {
+        // We can't detect this type of malice for ourselves.
+        if event.creator() == self.our_pub_id() {
+            return;
+        }
+
         let their_accusation = if let Some(&Observation::Accusation {
             ref offender,
             ref malice,
