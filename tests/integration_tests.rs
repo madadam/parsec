@@ -324,14 +324,18 @@ fn fork() {
     let genesis = names.by_ref().take(4).cloned().map(PeerId::new).collect();
     let malicious_peer = PeerId::new(unwrap!(names.next()));
 
+    let transaction0 = env.rng.gen();
+    let transaction1 = env.rng.gen();
+    let transaction2 = env.rng.gen();
+
     let schedule = Schedule::build(&mut env)
         .with_observation_schedule(
             genesis,
             vec![
                 (10, AddPeer(malicious_peer.clone())),
-                (100, Opaque(Transaction::new("one"))),
-                (200, Opaque(Transaction::new("two"))),
-                (300, Opaque(Transaction::new("three"))),
+                (100, Opaque(transaction0)),
+                (200, Opaque(transaction1)),
+                (300, Opaque(transaction2)),
             ],
         ).with_malice_schedule(
             malicious_peer,
