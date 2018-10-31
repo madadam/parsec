@@ -36,6 +36,8 @@ pub(crate) struct Event<T: NetworkEvent, P: PublicId> {
     index: u64,
     // Index of each peer's latest event that is an ancestor of this event.
     last_ancestors: BTreeMap<P, u64>,
+    // Topological order of this event relative to all other events in the gossip graph.
+    order: usize,
     // Peers with a fork having both sides seen by this event.
     forking_peers: BTreeSet<P>,
 }
@@ -142,6 +144,7 @@ impl<T: NetworkEvent, P: PublicId> Event<T, P> {
             signature: packed_event.signature,
             hash,
             index,
+            order: events.len(),
             last_ancestors,
             forking_peers,
         }))
@@ -201,6 +204,10 @@ impl<T: NetworkEvent, P: PublicId> Event<T, P> {
 
     pub fn last_ancestors(&self) -> &BTreeMap<P, u64> {
         &self.last_ancestors
+    }
+
+    pub fn order(&self) -> usize {
+        self.order
     }
 
     pub fn is_request(&self) -> bool {
@@ -268,6 +275,7 @@ impl<T: NetworkEvent, P: PublicId> Event<T, P> {
             signature: peer_list.our_id().sign_detached(&serialised_content),
             hash: Hash::from(serialised_content.as_slice()),
             index,
+            order: events.len(),
             last_ancestors,
             forking_peers,
         }
@@ -388,6 +396,7 @@ impl Event<Transaction, PeerId> {
         other_parent: Option<Hash>,
         index: u64,
         last_ancestors: BTreeMap<PeerId, u64>,
+        order: usize,
     ) -> Self {
         let cause = match cause {
             "Initial" => Cause::Initial,
@@ -437,6 +446,7 @@ impl Event<Transaction, PeerId> {
             hash: Hash::from(serialised_content.as_slice()),
             index,
             last_ancestors,
+            order,
             forking_peers: BTreeSet::new(),
         }
     }

@@ -11,7 +11,7 @@ use block::Block;
 use dev_utils::ParsedContents;
 use dump_graph;
 use error::{Error, Result};
-use gossip::{Event, PackedEvent, Request, Response};
+use gossip::{graph, Event, PackedEvent, Request, Response};
 use hash::Hash;
 use id::SecretId;
 use meta_voting::{MetaElectionHandle, MetaElections, MetaEvent, MetaEventBuilder, MetaVote, Step};
@@ -1409,45 +1409,24 @@ impl<T: NetworkEvent, S: SecretId> Parsec<T, S> {
         &self,
         peer_id: &S::PublicId,
     ) -> Result<impl Iterator<Item = &Event<T, S::PublicId>>> {
-        let peer_last_event = if let Some(event_hash) = self.peer_list.last_event(peer_id) {
+        let last_event = if let Some(event_hash) = self.peer_list.last_event(peer_id) {
             self.get_known_event(event_hash)?
         } else {
             log_or_panic!("{:?} doesn't have peer {:?}", self.our_pub_id(), peer_id);
             return Err(Error::Logic);
         };
 
-        let mut last_ancestors_hashes = peer_last_event
-            .last_ancestors()
-            .iter()
-            .flat_map(|(id, &index)| self.peer_list.events_by_index(id, index))
-            .collect::<BTreeSet<_>>();
+        let mut mask = vec![true; self.events.len()];
 
-        // As `peer_id` isn't guaranteed to have `last_ancestor_hash` for all peers (which will
-        // happen during the early stage when a node has not heard from all others), this may cause
-        // the early events in `self.events_order` to be skipped mistakenly. To avoid this, if there
-        // are any peers for which `peer_id` doesn't have a `last_ancestors` entry, add those peers'
-        // oldest events we know about to the list of hashes.
-        for (id, peer) in self.peer_list.iter() {
-            if !peer_last_event.last_ancestors().contains_key(id) {
-                for hash in peer.events_by_index(0) {
-                    let _ = last_ancestors_hashes.insert(hash);
-                }
-            }
+        for event in graph::ancestors(&self.events, last_event) {
+            mask[event.order()] = false;
         }
+
         Ok(self
             .events_order
             .iter()
-            .skip_while(move |hash| !last_ancestors_hashes.contains(hash))
             .filter_map(move |hash| self.get_known_event(hash).ok())
-            .filter(move |event| {
-                // We only need to include events newer than those indicated by
-                // `peer_last_event.last_ancestors()`
-                peer_last_event
-                    .last_ancestors()
-                    .get(event.creator())
-                    .map(|&last_ancestor_index| event.index() > last_ancestor_index)
-                    .unwrap_or(true)
-            }))
+            .filter(move |event| mask[event.order()]))
     }
 
     // Get the responsiveness threshold based on the current number of peers.
@@ -2909,7 +2888,6 @@ mod functional_tests {
     }
 
     #[test]
-    #[ignore]
     fn gossip_after_fork() {
         let alice_id = PeerId::new("Alice");
         let bob_id = PeerId::new("Bob");

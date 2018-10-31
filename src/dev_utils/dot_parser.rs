@@ -491,6 +491,7 @@ fn create_events(
                 .get(&next_parsed_event.creator)
                 .unwrap_or(&0),
             next_event_details.last_ancestors.clone(),
+            parsed_contents.events.len(),
         );
 
         if !next_event_details.interesting_content.is_empty() || !mvs.is_empty() {

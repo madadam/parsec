@@ -9,6 +9,7 @@
 mod cause;
 mod content;
 mod event;
+pub(super) mod graph;
 mod messages;
 mod packed_event;
 

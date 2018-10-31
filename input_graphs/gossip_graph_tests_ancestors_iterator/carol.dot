@@ -1,0 +1,204 @@
+digraph GossipGraph {
+  splines=false
+  rankdir=BT
+/// our_id: Carol
+/// peer_states: {Alice: "PeerState(VOTE|SEND|RECV)", Bob: "PeerState(VOTE|SEND|RECV)", Carol: "PeerState(VOTE|SEND|RECV)", Dave: "PeerState(VOTE|SEND|RECV)"}
+/// { 098c1440cc..
+/// cause: Response
+/// interesting_content: [Genesis({Alice, Bob, Carol, Dave})]
+/// last_ancestors: {Alice: 2, Bob: 3, Dave: 2}
+/// }
+/// { 30d7e4394d..
+/// cause: Initial
+/// interesting_content: []
+/// last_ancestors: {Alice: 0}
+/// }
+/// { 3105bde98a..
+/// cause: Response
+/// interesting_content: [Genesis({Alice, Bob, Carol, Dave})]
+/// last_ancestors: {Alice: 3, Bob: 1, Dave: 3}
+/// }
+/// { 36099e4269..
+/// cause: Observation(Genesis({Alice, Bob, Carol, Dave}))
+/// interesting_content: []
+/// last_ancestors: {Carol: 1}
+/// }
+/// { 4541f98755..
+/// cause: Initial
+/// interesting_content: []
+/// last_ancestors: {Dave: 0}
+/// }
+/// { 4c1a48932a..
+/// cause: Response
+/// interesting_content: []
+/// last_ancestors: {Bob: 2, Dave: 2}
+/// }
+/// { 59735e66d0..
+/// cause: Request
+/// interesting_content: []
+/// last_ancestors: {Alice: 4, Bob: 1, Dave: 2}
+/// }
+/// { 682aa6684e..
+/// cause: Observation(Genesis({Alice, Bob, Carol, Dave}))
+/// interesting_content: []
+/// last_ancestors: {Bob: 1}
+/// }
+/// { 80b9b8f122..
+/// cause: Request
+/// interesting_content: []
+/// last_ancestors: {Alice: 2, Bob: 1}
+/// }
+/// { 8158ee7022..
+/// cause: Request
+/// interesting_content: []
+/// last_ancestors: {Alice: 4, Bob: 4, Carol: 4, Dave: 3}
+/// }
+/// { 83dc5a58b7..
+/// cause: Request
+/// interesting_content: [Genesis({Alice, Bob, Carol, Dave})]
+/// last_ancestors: {Alice: 3, Bob: 1, Dave: 1}
+/// }
+/// { 9b85359b6d..
+/// cause: Request
+/// interesting_content: []
+/// last_ancestors: {Alice: 3, Bob: 4, Dave: 3}
+/// }
+/// { af91fcff5e..
+/// cause: Observation(Genesis({Alice, Bob, Carol, Dave}))
+/// interesting_content: []
+/// last_ancestors: {Dave: 1}
+/// }
+/// { bd0fe471c9..
+/// cause: Request
+/// interesting_content: [Genesis({Alice, Bob, Carol, Dave})]
+/// last_ancestors: {Alice: 4, Bob: 1, Carol: 3, Dave: 2}
+/// }
+/// { dc8296fe22..
+/// cause: Initial
+/// interesting_content: []
+/// last_ancestors: {Bob: 0}
+/// }
+/// { e2873d8612..
+/// cause: Observation(Genesis({Alice, Bob, Carol, Dave}))
+/// interesting_content: []
+/// last_ancestors: {Alice: 1}
+/// }
+/// { eedba06154..
+/// cause: Request
+/// interesting_content: []
+/// last_ancestors: {Bob: 1, Dave: 2}
+/// }
+/// { fa13ad61fd..
+/// cause: Initial
+/// interesting_content: []
+/// last_ancestors: {Carol: 0}
+/// }
+/// { fbb0f444d5..
+/// cause: Request
+/// interesting_content: []
+/// last_ancestors: {Bob: 1, Carol: 2}
+/// }
+    style=invis
+  subgraph cluster_Alice {
+    label=Alice
+    Alice [style=invis]
+    Alice -> "30d7e4394d.." [style=invis]
+    "30d7e4394d.." -> "e2873d8612.." [minlen=1]
+    "e2873d8612.." -> "80b9b8f122.." [minlen=1]
+    "80b9b8f122.." -> "83dc5a58b7.." [minlen=1]
+    "83dc5a58b7.." -> "59735e66d0.." [minlen=1]
+
+  }
+  "682aa6684e.." -> "80b9b8f122.." [constraint=false]
+  "af91fcff5e.." -> "83dc5a58b7.." [constraint=false]
+  "eedba06154.." -> "59735e66d0.." [constraint=false]
+
+    style=invis
+  subgraph cluster_Dave {
+    label=Dave
+    Dave [style=invis]
+    Dave -> "4541f98755.." [style=invis]
+    "4541f98755.." -> "af91fcff5e.." [minlen=1]
+    "af91fcff5e.." -> "eedba06154.." [minlen=1]
+    "eedba06154.." -> "3105bde98a.." [minlen=2]
+
+  }
+  "682aa6684e.." -> "eedba06154.." [constraint=false]
+  "83dc5a58b7.." -> "3105bde98a.." [constraint=false]
+
+    style=invis
+  subgraph cluster_Bob {
+    label=Bob
+    Bob [style=invis]
+    Bob -> "dc8296fe22.." [style=invis]
+    "dc8296fe22.." -> "682aa6684e.." [minlen=1]
+    "682aa6684e.." -> "4c1a48932a.." [minlen=2]
+    "4c1a48932a.." -> "098c1440cc.." [minlen=1]
+    "098c1440cc.." -> "9b85359b6d.." [minlen=1]
+
+  }
+  "eedba06154.." -> "4c1a48932a.." [constraint=false]
+  "80b9b8f122.." -> "098c1440cc.." [constraint=false]
+  "3105bde98a.." -> "9b85359b6d.." [constraint=false]
+
+    style=invis
+  subgraph cluster_Carol {
+    label=Carol
+    Carol [style=invis]
+    Carol -> "fa13ad61fd.." [style=invis]
+    "fa13ad61fd.." -> "36099e4269.." [minlen=1]
+    "36099e4269.." -> "fbb0f444d5.." [minlen=1]
+    "fbb0f444d5.." -> "bd0fe471c9.." [minlen=3]
+    "bd0fe471c9.." -> "8158ee7022.." [minlen=1]
+
+  }
+  "682aa6684e.." -> "fbb0f444d5.." [constraint=false]
+  "59735e66d0.." -> "bd0fe471c9.." [constraint=false]
+  "9b85359b6d.." -> "8158ee7022.." [constraint=false]
+
+/// meta-vote section
+ "098c1440cc.." [fillcolor=white, label="B_3
+[Genesis({Alice, Bob, Carol, Dave})]"]
+ "098c1440cc.." [shape=rectangle, style=filled, fillcolor=crimson]
+ "30d7e4394d.." [fillcolor=white, label="A_0"]
+ "3105bde98a.." [fillcolor=white, label="D_3
+[Genesis({Alice, Bob, Carol, Dave})]"]
+ "3105bde98a.." [shape=rectangle, style=filled, fillcolor=crimson]
+ "36099e4269.." [fillcolor=white, label="C_1
+Genesis({Alice, Bob, Carol, Dave})"]
+ "36099e4269.." [shape=rectangle, style=filled, fillcolor=cyan]
+ "4541f98755.." [fillcolor=white, label="D_0"]
+ "4c1a48932a.." [fillcolor=white, label="B_2"]
+ "59735e66d0.." [fillcolor=white, label="A_4"]
+ "682aa6684e.." [fillcolor=white, label="B_1
+Genesis({Alice, Bob, Carol, Dave})"]
+ "682aa6684e.." [shape=rectangle, style=filled, fillcolor=cyan]
+ "80b9b8f122.." [fillcolor=white, label="A_2"]
+ "8158ee7022.." [fillcolor=white, label="C_4"]
+ "83dc5a58b7.." [fillcolor=white, label="A_3
+[Genesis({Alice, Bob, Carol, Dave})]"]
+ "83dc5a58b7.." [shape=rectangle, style=filled, fillcolor=crimson]
+ "9b85359b6d.." [fillcolor=white, label="B_4"]
+ "af91fcff5e.." [fillcolor=white, label="D_1
+Genesis({Alice, Bob, Carol, Dave})"]
+ "af91fcff5e.." [shape=rectangle, style=filled, fillcolor=cyan]
+ "bd0fe471c9.." [fillcolor=white, label="C_3
+[Genesis({Alice, Bob, Carol, Dave})]"]
+ "bd0fe471c9.." [shape=rectangle, style=filled, fillcolor=crimson]
+ "dc8296fe22.." [fillcolor=white, label="B_0"]
+ "e2873d8612.." [fillcolor=white, label="A_1
+Genesis({Alice, Bob, Carol, Dave})"]
+ "e2873d8612.." [shape=rectangle, style=filled, fillcolor=cyan]
+ "eedba06154.." [fillcolor=white, label="D_2"]
+ "fa13ad61fd.." [fillcolor=white, label="C_0"]
+ "fbb0f444d5.." [fillcolor=white, label="C_2"]
+
+  {
+    rank=same
+    Alice [style=filled, color=white]
+    Dave [style=filled, color=white]
+    Bob [style=filled, color=white]
+    Carol [style=filled, color=white]
+  }
+  Alice -> Bob -> Carol -> Dave [style=invis]
+}
