@@ -2907,4 +2907,69 @@ mod functional_tests {
             _ => true,
         }));
     }
+
+    #[test]
+    #[ignore]
+    fn gossip_after_fork() {
+        let alice_id = PeerId::new("Alice");
+        let bob_id = PeerId::new("Bob");
+
+        let mut genesis_group = BTreeSet::new();
+        let _ = genesis_group.insert(alice_id.clone());
+        let _ = genesis_group.insert(bob_id.clone());
+        let _ = genesis_group.insert(PeerId::new("Carol"));
+        let _ = genesis_group.insert(PeerId::new("Dave"));
+
+        let mut alice = Parsec::from_genesis(alice_id.clone(), &genesis_group, is_supermajority);
+
+        // Alice creates couple of valid events.
+        let a_1_hash = *unwrap!(alice.peer_list.our_events().next());
+
+        let a_2 = Event::new_from_observation(
+            a_1_hash,
+            Observation::OpaquePayload(Transaction::new("one")),
+            &alice.events,
+            &alice.peer_list,
+        );
+        let a_2_hash = *a_2.hash();
+        unwrap!(alice.add_event(a_2));
+
+        let a_3 = Event::new_from_observation(
+            a_2_hash,
+            Observation::OpaquePayload(Transaction::new("two")),
+            &alice.events,
+            &alice.peer_list,
+        );
+        let a_3_hash = *a_3.hash();
+        unwrap!(alice.add_event(a_3));
+
+        let mut bob = Parsec::from_genesis(bob_id.clone(), &genesis_group, is_supermajority);
+
+        // Alice sends a gossip request to Bob and receives a response back.
+        let req = unwrap!(alice.create_gossip(Some(&bob_id)));
+        let res = unwrap!(bob.handle_request(&alice_id, req));
+        unwrap!(alice.handle_response(&bob_id, res));
+
+        // Now Bob has a_0, a_1, a_2 and a_3 and Alice knows it.
+        assert!(bob.events.contains_key(&a_1_hash));
+        assert!(bob.events.contains_key(&a_2_hash));
+        assert!(bob.events.contains_key(&a_3_hash));
+
+        // Alice creates a fork.
+        let a_2_fork = Event::new_from_observation(
+            a_1_hash,
+            Observation::OpaquePayload(Transaction::new("two-fork")),
+            &alice.events,
+            &alice.peer_list,
+        );
+        let a_2_fork_hash = *a_2_fork.hash();
+        unwrap!(alice.add_event(a_2_fork));
+
+        // Alice sends another gossip request to Bob.
+        let req = unwrap!(alice.create_gossip(Some(&bob_id)));
+        let _ = unwrap!(bob.handle_request(&alice_id, req));
+
+        // Verify that Bob now has the forked event.
+        assert!(bob.events.contains_key(&a_2_fork_hash));
+    }
 }
