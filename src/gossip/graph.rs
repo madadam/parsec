@@ -39,6 +39,12 @@ impl<'a, T: NetworkEvent, P: PublicId> Iterator for Ancestors<'a, T, P> {
     type Item = &'a Event<T, P>;
 
     fn next(&mut self) -> Option<Self::Item> {
+        // This is a modified breadth-first search: Instead of using a simple queue to track the
+        // events to visit next, we use a priority queue (implemented as a BTreeMap keyed by
+        // Event::order) so the events are visited in reverse topological order (children before
+        // parents). We also keep track of the events we already visited, to avoid returning single
+        // event more than once.
+
         loop {
             let order = *self.queue.keys().rev().next()?;
             let event = self.queue.remove(&order)?;
