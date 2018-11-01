@@ -18,10 +18,10 @@ pub struct Request<T: NetworkEvent, P: PublicId> {
     pub(crate) packed_events: Vec<PackedEvent<T, P>>,
 }
 
-impl<'a, T: 'a + NetworkEvent, P: 'a + PublicId> Request<T, P> {
-    pub(crate) fn new<I: Iterator<Item = &'a Event<T, P>>>(events_iter: I) -> Self {
+impl<T: NetworkEvent, P: PublicId> Request<T, P> {
+    pub(crate) fn new(events: Vec<&Event<T, P>>) -> Self {
         Self {
-            packed_events: events_iter.map(Event::pack).collect(),
+            packed_events: events.into_iter().map(Event::pack).collect(),
         }
     }
 }
@@ -33,10 +33,10 @@ pub struct Response<T: NetworkEvent, P: PublicId> {
     pub(crate) packed_events: Vec<PackedEvent<T, P>>,
 }
 
-impl<'a, T: 'a + NetworkEvent, P: 'a + PublicId> Response<T, P> {
-    pub(crate) fn new<I: Iterator<Item = &'a Event<T, P>>>(events_iter: I) -> Self {
+impl<T: NetworkEvent, P: PublicId> Response<T, P> {
+    pub(crate) fn new(events: Vec<&Event<T, P>>) -> Self {
         Self {
-            packed_events: events_iter.map(Event::pack).collect(),
+            packed_events: events.into_iter().map(Event::pack).collect(),
         }
     }
 }

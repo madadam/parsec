@@ -361,7 +361,6 @@ fn parse_footer() -> Parser<u8, ()> {
 pub(crate) struct ParsedContents {
     pub our_id: PeerId,
     pub events: BTreeMap<Hash, Event<Transaction, PeerId>>,
-    pub events_order: Vec<Hash>,
     pub meta_events: BTreeMap<Hash, MetaEvent<Transaction, PeerId>>,
     pub peer_list: PeerList<PeerId>,
 }
@@ -374,7 +373,6 @@ impl ParsedContents {
         ParsedContents {
             our_id,
             events: BTreeMap::new(),
-            events_order: Vec::new(),
             meta_events: BTreeMap::new(),
             peer_list,
         }
@@ -382,7 +380,11 @@ impl ParsedContents {
 
     /// Remove and return the latest (newest) event from the `ParsedContents`, if any.
     pub fn remove_latest_event(&mut self) -> Option<Event<Transaction, PeerId>> {
-        let hash = self.events_order.pop()?;
+        let hash = *self
+            .events
+            .values()
+            .max_by_key(|event| event.order())
+            .map(|event| event.hash())?;
         let event = self.events.remove(&hash)?;
 
         self.peer_list.remove_event(&event);
@@ -396,9 +398,7 @@ impl ParsedContents {
         unwrap!(self.peer_list.add_event(&event));
 
         let hash = *event.hash();
-
         let _ = self.events.insert(hash, event);
-        self.events_order.push(hash);
     }
 }
 
@@ -511,7 +511,6 @@ fn create_events(
             .entry(next_parsed_event.creator.clone())
             .or_insert(0) += 1;
         let _ = event_hashes.insert(ev_id, *next_event.hash());
-        parsed_contents.events_order.push(*next_event.hash());
         let _ = parsed_contents
             .events
             .insert(*next_event.hash(), next_event);
@@ -594,7 +593,6 @@ mod tests {
             assert!(dot_file_path.set_extension("dot"));
             let parsed_result = unwrap!(parse_dot_file(&dot_file_path));
 
-            assert_eq!(gossip_graph.len(), parsed_result.events_order.len());
             assert_eq!(gossip_graph, parsed_result.events);
 
             // The dumped dot file doesn't contain all the meta_votes
