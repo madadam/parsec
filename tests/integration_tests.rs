@@ -217,11 +217,14 @@ fn random_schedule_no_delays() {
 }
 
 #[test]
-fn add_peers() {
+fn add_many_peers() {
     let mut env = Environment::new(SEED);
+
     let schedule = Schedule::build(&mut env)
         .with_options(&ScheduleOptions {
-            peers_to_add: 2,
+            genesis_size: 2,
+            peers_to_add: 3,
+            opaque_to_add: 0,
             ..Default::default()
         }).finish();
 
