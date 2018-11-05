@@ -12,7 +12,7 @@ use block::Block;
 use error::Result;
 use gossip::{Request, Response};
 use mock::{PeerId, Transaction};
-use observation::Observation as ParsecObservation;
+use observation::{Malice, Observation as ParsecObservation};
 use parsec::{self, Parsec};
 use rand::Rng;
 use std::collections::{BTreeMap, BTreeSet};
@@ -179,6 +179,26 @@ impl Peer {
             Personality::Honest(_) => false,
             Personality::Malicious(ref p) => p.did_commit_malice(),
         }
+    }
+
+    /// Returns iterator over all accusations raised by this peer that haven't been retrieved by
+    /// `poll` yet.
+    pub fn unpolled_accusations(&self) -> impl Iterator<Item = (&PeerId, &Malice)> {
+        let honest = match self.personality {
+            Personality::Honest(ref p) => Some(p),
+            Personality::Malicious(_) => None,
+        };
+
+        honest
+            .into_iter()
+            .flat_map(|p| p.our_unpolled_observations())
+            .filter_map(|observation| match *observation {
+                ParsecObservation::Accusation {
+                    ref offender,
+                    ref malice,
+                } => Some((offender, malice)),
+                _ => None,
+            })
     }
 
     fn handle_consensus(&mut self, block: &Block<Transaction, PeerId>) {

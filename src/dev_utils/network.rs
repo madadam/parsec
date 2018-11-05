@@ -13,7 +13,7 @@ use block::Block;
 use error::Error;
 use gossip::{Request, Response};
 use mock::{PeerId, Transaction};
-use observation::Observation as ParsecObservation;
+use observation::{Malice, Observation as ParsecObservation};
 use parsec::is_supermajority;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -63,8 +63,12 @@ pub enum ConsensusError {
         observation: Observation,
         signatures: BTreeSet<PeerId>,
     },
-    MaliciousPeerNotAccused(PeerId),
-    HonestPeerAccused(PeerId),
+    MissingAccusation(PeerId),
+    InvalidAccusation {
+        accuser: PeerId,
+        accused: PeerId,
+        malice: Malice,
+    },
 }
 
 impl Network {
@@ -123,7 +127,7 @@ impl Network {
         }
     }
 
-    fn peer(&mut self, id: &PeerId) -> &Peer {
+    fn peer(&self, id: &PeerId) -> &Peer {
         unwrap!(self.peers.get(id))
     }
 
@@ -217,7 +221,7 @@ impl Network {
     ) -> bool {
         self.check_consensus(expected_peers, num_expected_observations)
             .is_ok()
-            && self.check_accusations().is_ok()
+            && self.check_valid_accusations().is_ok()
     }
 
     /// Checks whether there is a right number of blocks and the blocks are in an agreeing order
@@ -311,8 +315,8 @@ impl Network {
         Ok(())
     }
 
-    /// Checks that all malicious nodes have been accused and that no honest node has.
-    fn check_accusations(&self) -> Result<(), ConsensusError> {
+    /// Checks that all malicious nodes have been accused.
+    fn check_valid_accusations(&self) -> Result<(), ConsensusError> {
         let offenders = self
             .active_honest_peers()
             .next()
@@ -326,16 +330,41 @@ impl Network {
             }).unwrap_or_else(BTreeSet::new);
 
         for (peer_id, peer) in &self.peers {
-            if peer.did_commit_malice() {
-                if !offenders.contains(peer_id) {
-                    return Err(ConsensusError::MaliciousPeerNotAccused(peer_id.clone()));
-                }
-            } else if offenders.contains(peer_id) {
-                return Err(ConsensusError::HonestPeerAccused(peer_id.clone()));
+            if peer.did_commit_malice() && !offenders.contains(peer_id) {
+                return Err(ConsensusError::MissingAccusation(peer_id.clone()));
             }
         }
 
         Ok(())
+    }
+
+    /// Check that honest nodes have not been accused by other honest nodes.
+    fn check_invalid_accusations(&self, peer_id: &PeerId) -> Result<(), ConsensusError> {
+        let peer = self.peer(peer_id);
+
+        // Accusations from malicious peers are "expected", so don't fail on them.
+        if peer.is_malicious() {
+            return Ok(());
+        }
+
+        // Fail if we find an accusation from honest peer against a peer that have not committed
+        // malice yet.
+        let invalid_accusation = peer.unpolled_accusations().find(|(offender, _)| {
+            self.peers
+                .get(offender)
+                .map(|peer| !peer.did_commit_malice())
+                .unwrap_or(false)
+        });
+
+        if let Some((offender, malice)) = invalid_accusation {
+            return Err(ConsensusError::InvalidAccusation {
+                accuser: peer.id().clone(),
+                accused: offender.clone(),
+                malice: malice.clone(),
+            });
+        } else {
+            Ok(())
+        }
     }
 
     /// Simulates the network according to the given schedule
@@ -385,6 +414,8 @@ impl Network {
                     self.peer_mut(&peer).before_step(global_step);
                     self.handle_messages(&peer, global_step);
                     self.peer_mut(&peer).poll();
+                    self.check_invalid_accusations(&peer)?;
+
                     if let RequestTiming::DuringThisStep(req) = request_timing {
                         match self.peer(&peer).create_gossip(&req.recipient) {
                             Ok(request) => {
@@ -405,6 +436,7 @@ impl Network {
                     self.peer_mut(&peer).vote_for(&observation);
                 }
             }
+
             self.check_consensus_broken()?;
             if self.consensus_complete(&peers, num_observations) {
                 break;
@@ -413,6 +445,6 @@ impl Network {
 
         self.check_consensus(&peers, num_observations)?;
         self.check_blocks_signatories()?;
-        self.check_accusations()
+        self.check_valid_accusations()
     }
 }
