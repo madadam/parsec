@@ -63,7 +63,7 @@ pub struct Parsec<T: NetworkEvent, S: SecretId> {
     // The Gossip graph.
     graph: Graph<T, S::PublicId>,
     // Information about observations stored in the graph, mapped to their hashes.
-    observations: BTreeMap<ObservationHash, ObservationInfo<T, S::PublicId>>,
+    observations: BTreeMap<ObservationHash, ObservationContainer<T, S::PublicId>>,
     // Consensused network events that have not been returned via `poll()` yet.
     consensused_blocks: VecDeque<Block<T, S::PublicId>>,
     // The map of meta votes of the events on each consensus block.
@@ -543,12 +543,7 @@ impl<T: NetworkEvent, S: SecretId> Parsec<T, S> {
 
         self.peer_list.confirm_can_add_event(&event)?;
 
-        if let Some((payload_hash, new_info)) = ObservationInfo::create(&event) {
-            let info = self.observations.entry(payload_hash).or_insert(new_info);
-            if our {
-                info.created_by_us = true;
-            }
-        }
+        ObservationContainer::create(self.peer_list.our_pub_id(), &event, &mut self.observations);
 
         let is_initial = event.is_initial();
         let event_index = {
@@ -1950,24 +1945,34 @@ impl<T: NetworkEvent, S: SecretId> Drop for Parsec<T, S> {
 }
 
 #[derive(Debug)]
-struct ObservationInfo<T: NetworkEvent, P: PublicId> {
+struct ObservationContainer<T: NetworkEvent, P: PublicId> {
     observation: Observation<T, P>,
     consensused: bool,
     created_by_us: bool,
 }
 
-impl<T: NetworkEvent, P: PublicId> ObservationInfo<T, P> {
-    fn create(event: &Event<T, P>) -> Option<(ObservationHash, Self)> {
-        event.payload_with_hash().map(|(observation, hash)| {
-            (
-                *hash,
-                Self {
-                    observation: observation.clone(),
-                    consensused: false,
-                    created_by_us: false,
-                },
-            )
-        })
+impl<T: NetworkEvent, P: PublicId> ObservationContainer<T, P> {
+    fn new(observation: Observation<T, P>) -> Self {
+        Self {
+            observation,
+            consensused: false,
+            created_by_us: false,
+        }
+    }
+
+    fn create(
+        our_id: &P,
+        event: &Event<T, P>,
+        store: &mut BTreeMap<ObservationHash, ObservationContainer<T, P>>,
+    ) {
+        if let Some((observation, hash)) = event.payload_with_hash() {
+            let container = store
+                .entry(*hash)
+                .or_insert_with(|| Self::new(observation.clone()));
+            if our_id == event.creator() {
+                container.created_by_us = true
+            }
+        }
     }
 }
 
@@ -1988,12 +1993,9 @@ impl Parsec<Transaction, PeerId> {
         {
             for payload_hash in &meta_event.interesting_content {
                 if let Some(payload) = parsed_contents.observation_map.remove(payload_hash) {
-                    let obs_info = ObservationInfo {
-                        observation: payload,
-                        consensused: false,
-                        created_by_us: false,
-                    };
-                    let _ = parsec.observations.insert(*payload_hash, obs_info);
+                    let _ = parsec
+                        .observations
+                        .insert(*payload_hash, ObservationContainer::new(payload));
                 }
             }
         }
@@ -2001,12 +2003,7 @@ impl Parsec<Transaction, PeerId> {
         // ..and also the payloads carried by events.
         let our_pub_id = parsec.our_pub_id().clone();
         for event in &parsed_contents.graph {
-            if let Some((payload_hash, new_info)) = ObservationInfo::create(&*event) {
-                let info = parsec.observations.entry(payload_hash).or_insert(new_info);
-                if *event.creator() == our_pub_id {
-                    info.created_by_us = true;
-                }
-            }
+            ObservationContainer::create(&our_pub_id, &*event, &mut parsec.observations);
         }
 
         for consensused in parsed_contents.meta_elections.consensus_history() {
