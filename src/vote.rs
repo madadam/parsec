@@ -44,10 +44,10 @@ impl<T: NetworkEvent, P: PublicId> Vote<T, P> {
 
     /// Creates a `Proof` from this `Vote`.  Returns `Err` if this `Vote` is not valid (i.e. if
     /// `!self.is_valid()`).
-    pub fn create_proof(&self, public_id: &P) -> Result<Proof<P>, Error> {
-        if self.is_valid(public_id) {
+    pub fn create_proof(&self, public_id: P) -> Result<Proof<P>, Error> {
+        if self.is_valid(&public_id) {
             return Ok(Proof {
-                public_id: public_id.clone(),
+                public_id,
                 signature: self.signature.clone(),
             });
         }

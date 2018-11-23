@@ -170,6 +170,16 @@ impl<T: NetworkEvent, P: PublicId> Event<T, P> {
         }
     }
 
+    pub fn vote_with_payload_hash(&self) -> Option<(&Vote<T, P>, &ObservationHash)> {
+        self.vote().and_then(|vote| match self.cache.payload_hash {
+            Some(ref hash) => Some((vote, hash)),
+            None => {
+                log_or_panic!("Event has payload but no payload hash: {:?}", self);
+                None
+            }
+        })
+    }
+
     pub fn payload(&self) -> Option<&Observation<T, P>> {
         self.vote().map(Vote::payload)
     }
@@ -179,13 +189,8 @@ impl<T: NetworkEvent, P: PublicId> Event<T, P> {
     }
 
     pub fn payload_with_hash(&self) -> Option<(&Observation<T, P>, &ObservationHash)> {
-        self.vote().and_then(|vote| match self.cache.payload_hash {
-            Some(ref hash) => Some((vote.payload(), hash)),
-            None => {
-                log_or_panic!("Event has payload but no payload hash: {:?}", self);
-                None
-            }
-        })
+        self.vote_with_payload_hash()
+            .map(|(vote, hash)| (vote.payload(), hash))
     }
 
     pub fn creator(&self) -> &P {

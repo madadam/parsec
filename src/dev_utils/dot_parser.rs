@@ -10,11 +10,11 @@ use gossip::{CauseInput, Event, EventIndex, Graph, IndexedEventRef};
 use hash::Hash;
 use hash::HASH_LEN;
 use meta_voting::{
-    BoolSet, MetaElection, MetaElectionHandle, MetaElections, MetaEvent, MetaVote, Step,
+    BoolSet, ConsensusInfo, MetaElection, MetaElectionHandle, MetaElections, MetaEvent, MetaVote,
+    Step,
 };
 use mock::{PeerId, Transaction};
-use observation::Observation;
-use observation::ObservationHash;
+use observation::{Observation, ObservationHash};
 use peer_list::{PeerList, PeerState};
 use pom::char_class::{alphanum, digit, hex_digit, multispace, space};
 use pom::parser::*;
@@ -303,7 +303,7 @@ fn parse_last_ancestors() -> Parser<u8, BTreeMap<PeerId, usize>> {
 
 #[derive(Debug)]
 struct ParsedMetaElections {
-    consensus_history: Vec<ObservationHash>,
+    consensus_history: Vec<ConsensusInfo>,
     meta_elections: BTreeMap<MetaElectionHandle, ParsedMetaElection>,
 }
 
@@ -318,8 +318,12 @@ fn parse_meta_elections() -> Parser<u8, ParsedMetaElections> {
         })
 }
 
-fn parse_consensus_history() -> Parser<u8, Vec<ObservationHash>> {
+fn parse_consensus_history() -> Parser<u8, Vec<ConsensusInfo>> {
     let hash_line = comment_prefix() * (parse_hash()).map(ObservationHash) - next_line();
+    let hash_line = hash_line.map(|hash| ConsensusInfo {
+        hash,
+        carriers: BTreeSet::new(),
+    });
     comment_prefix() * seq(b"consensus_history:") * next_line() * hash_line.repeat(0..)
 }
 
@@ -828,9 +832,7 @@ fn convert_to_meta_election(
             }).collect(),
         consensus_len: meta_election.consensus_len,
         start_index: meta_election.start_index,
-        payload_hash: meta_election
-            .payload
-            .map(|payload| ObservationHash::from(&payload)),
+        payload_hash: meta_election.payload.as_ref().map(ObservationHash::from),
     }
 }
 

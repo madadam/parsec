@@ -19,24 +19,27 @@ use vote::Vote;
 pub struct Block<T: NetworkEvent, P: PublicId> {
     payload: Observation<T, P>,
     proofs: BTreeSet<Proof<P>>,
+    excess: bool,
 }
 
 impl<T: NetworkEvent, P: PublicId> Block<T, P> {
     /// Creates a `Block` from `payload` and `votes`.
-    pub fn new(payload: Observation<T, P>, votes: &BTreeMap<P, Vote<T, P>>) -> Result<Self, Error> {
-        let proofs: BTreeSet<Proof<P>> = votes
-            .iter()
-            .filter_map(|(public_id, vote)| {
-                if let Ok(proof) = vote.create_proof(public_id) {
-                    Some(proof.clone())
-                } else {
-                    None
-                }
-            }).collect();
-        if proofs.len() != votes.len() {
-            return Err(Error::SignatureFailure);
-        }
-        Ok(Self { payload, proofs })
+    pub fn new(
+        payload: Observation<T, P>,
+        votes: BTreeMap<P, Vote<T, P>>,
+        excess: bool,
+    ) -> Result<Self, Error> {
+        let proofs: Result<BTreeSet<_>, _> = votes
+            .into_iter()
+            .map(|(public_id, vote)| vote.create_proof(public_id))
+            .collect();
+        let proofs = proofs?;
+
+        Ok(Self {
+            payload,
+            proofs,
+            excess,
+        })
     }
 
     /// Returns the payload of this block.
@@ -49,6 +52,14 @@ impl<T: NetworkEvent, P: PublicId> Block<T, P> {
         &self.proofs
     }
 
+    /// Is this an "excess" block?
+    /// Excess block is a block signed by less than the required number of voters.
+    /// Excess block can only be retrieved from `Parsec` if a regular block with the same payload
+    /// has already been retrieved before.
+    pub fn is_excess(&self) -> bool {
+        self.excess
+    }
+
     /// Converts `vote` to a `Proof` and attempts to add it to the block.  Returns an error if
     /// `vote` is invalid (i.e. signature check fails or the `vote` is for a different network
     /// event), `Ok(true)` if the `Proof` wasn't previously held in this `Block`, or `Ok(false)` if
@@ -57,7 +68,7 @@ impl<T: NetworkEvent, P: PublicId> Block<T, P> {
         if &self.payload != vote.payload() {
             return Err(Error::MismatchedPayload);
         }
-        let proof = vote.create_proof(peer_id)?;
+        let proof = vote.create_proof(peer_id.clone())?;
         Ok(self.proofs.insert(proof))
     }
 }

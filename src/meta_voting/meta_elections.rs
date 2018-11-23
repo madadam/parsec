@@ -54,7 +54,7 @@ pub(crate) struct MetaElection<P: PublicId> {
     pub(crate) interesting_events: BTreeMap<P, VecDeque<EventIndex>>,
     // Length of `MetaElections::consensus_history` at the time this meta-election was created.
     pub(crate) consensus_len: usize,
-    // Payload hash decided by this meta-election.
+    // Hash of the payload decided by this meta-election.
     pub(crate) payload_hash: Option<ObservationHash>,
     // Topological index of the first event processed in this meta-election.
     pub(crate) start_index: usize,
@@ -92,7 +92,7 @@ impl<P: PublicId> MetaElection<P> {
         self.interesting_events.clear();
     }
 
-    fn is_already_interesting_content(&self, creator: &P, payload_hash: &ObservationHash) -> bool {
+    fn is_already_interesting(&self, creator: &P, payload_hash: &ObservationHash) -> bool {
         self.interesting_events
             .get(creator)
             .map_or(false, |indices| {
@@ -115,8 +115,8 @@ pub(crate) struct MetaElections<P: PublicId> {
     current_election: MetaElection<P>,
     // Meta-elections that are already decided by us, but not by all the other peers.
     previous_elections: BTreeMap<MetaElectionHandle, MetaElection<P>>,
-    // Hashes of the consensused blocks' payloads in the order they were consensused.
-    consensus_history: Vec<ObservationHash>,
+    // Info of the consensused blocks' payloads in the order they were consensused.
+    consensus_history: Vec<ConsensusInfo>,
 }
 
 impl<P: PublicId> MetaElections<P> {
@@ -132,7 +132,7 @@ impl<P: PublicId> MetaElections<P> {
     #[cfg(any(test, feature = "testing"))]
     pub fn from_map_and_history(
         mut elections_map: BTreeMap<MetaElectionHandle, MetaElection<P>>,
-        consensus_history: Vec<ObservationHash>,
+        consensus_history: Vec<ConsensusInfo>,
     ) -> Self {
         let current_election = unwrap!(elections_map.remove(&MetaElectionHandle::CURRENT));
         MetaElections {
@@ -253,7 +253,7 @@ impl<P: PublicId> MetaElections<P> {
             .unwrap_or(0)
     }
 
-    pub fn consensus_history(&self) -> &[ObservationHash] {
+    pub fn consensus_history(&self) -> &[ConsensusInfo] {
         &self.consensus_history
     }
 
@@ -281,27 +281,52 @@ impl<P: PublicId> MetaElections<P> {
         meta_event.interesting_content.first()
     }
 
-    /// Is the given payload candidate for being interesting from the point of view of an event by
-    /// the given creator?
-    pub fn is_interesting_content_candidate(
+    /// Is the payload with `payload_hash` carried by `carrier` candidate for being interesting from
+    /// the point of view of an event by `creator`?
+    /// Returns:
+    ///     - `None`        - payload is definitely not interesting
+    ///     - `Some(false)` - payload is potentially interesting and hasn't been consensused before
+    ///     - `Some(true)`  - payload is potentially interesting and has been consensused before
+    pub fn interesting_content_candidate_status(
+        &self,
+        handle: MetaElectionHandle,
+        creator: &P,
+        payload_hash: &ObservationHash,
+        carrier: EventIndex,
+    ) -> Option<bool> {
+        let election = self.get(handle)?;
+
+        // Already interesting?
+        if election.is_already_interesting(creator, payload_hash) {
+            return None;
+        }
+
+        // Already consensused?
+        let mut consensused = false;
+        for info in &self.consensus_history[..election.consensus_len] {
+            if info.hash == *payload_hash {
+                if info.carriers.contains(&carrier) {
+                    // Consensused on the same event -> not interesting.
+                    return None;
+                } else {
+                    // Consensused on different event.
+                    consensused = true;
+                }
+            }
+        }
+
+        Some(consensused)
+    }
+
+    pub fn is_already_interesting(
         &self,
         handle: MetaElectionHandle,
         creator: &P,
         payload_hash: &ObservationHash,
     ) -> bool {
-        let election = if let Some(election) = self.get(handle) {
-            election
-        } else {
-            return false;
-        };
-
-        // Already interesting?
-        if election.is_already_interesting_content(creator, payload_hash) {
-            return false;
-        }
-
-        // Already consensused?
-        !self.consensus_history()[..election.consensus_len].contains(payload_hash)
+        self.get(handle)
+            .map(|election| election.is_already_interesting(creator, payload_hash))
+            .unwrap_or(false)
     }
 
     pub fn start_index(&self, handle: MetaElectionHandle) -> usize {
@@ -311,11 +336,12 @@ impl<P: PublicId> MetaElections<P> {
     /// Creates new election and returns handle of the previous election.
     pub fn new_election(
         &mut self,
-        payload_hash: ObservationHash,
+        consensus_info: ConsensusInfo,
         voters: BTreeSet<P>,
         start_index: usize,
     ) -> MetaElectionHandle {
-        self.consensus_history.push(payload_hash);
+        let payload_hash = consensus_info.hash;
+        self.consensus_history.push(consensus_info);
 
         let new = MetaElection::new(voters, self.consensus_history.len(), start_index);
 
@@ -370,7 +396,7 @@ impl<P: PublicId> MetaElections<P> {
         let hash = self
             .consensus_history
             .last()
-            .cloned()
+            .map(|info| info.hash)
             .unwrap_or(ObservationHash::ZERO);
         self.current_election.initialise(peer_ids, hash);
     }
@@ -417,6 +443,12 @@ impl<P: PublicId> MetaElections<P> {
 
         handle
     }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ConsensusInfo {
+    pub hash: ObservationHash,
+    pub carriers: BTreeSet<EventIndex>,
 }
 
 #[cfg(any(all(test, feature = "mock"), feature = "dump-graphs"))]

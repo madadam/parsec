@@ -38,7 +38,28 @@ pub struct Network {
 #[derive(Debug)]
 pub struct BlocksOrder {
     peer: PeerId,
-    order: Vec<Observation>,
+    order: Vec<BlockInfo>,
+}
+
+#[derive(Debug)]
+pub struct BlockInfo {
+    observation: Observation,
+    voters: BTreeSet<PeerId>,
+    excess: bool,
+}
+
+impl BlockInfo {
+    fn new(block: &Block<Transaction, PeerId>) -> Self {
+        Self {
+            observation: block.payload().clone(),
+            voters: block
+                .proofs()
+                .iter()
+                .map(|proof| proof.public_id.clone())
+                .collect(),
+            excess: block.is_excess(),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -116,19 +137,16 @@ impl Network {
     /// Returns true if all peers hold the same sequence of stable blocks.
     fn blocks_all_in_sequence(&self) -> Result<(), ConsensusError> {
         let first_peer = unwrap!(self.active_peers().next());
-        let payloads = first_peer.blocks_payloads();
-        if let Some(peer) = self
-            .active_peers()
-            .find(|peer| peer.blocks_payloads() != payloads)
-        {
+        let blocks = first_peer.blocks();
+        if let Some(peer) = self.active_peers().find(|peer| peer.blocks() != blocks) {
             Err(ConsensusError::DifferingBlocksOrder {
                 order_1: BlocksOrder {
                     peer: first_peer.id.clone(),
-                    order: payloads.into_iter().cloned().collect(),
+                    order: blocks.into_iter().map(BlockInfo::new).collect(),
                 },
                 order_2: BlocksOrder {
                     peer: peer.id.clone(),
-                    order: peer.blocks_payloads().into_iter().cloned().collect(),
+                    order: peer.blocks().into_iter().map(BlockInfo::new).collect(),
                 },
             })
         } else {
@@ -200,18 +218,18 @@ impl Network {
     fn check_consensus_broken(&self) -> Result<(), ConsensusError> {
         let mut block_order = BTreeMap::new();
         for peer in self.active_peers() {
-            for (index, block) in peer.blocks_payloads().into_iter().enumerate() {
+            for (index, block) in peer.blocks().into_iter().enumerate() {
                 if let Some((old_peer, old_index)) = block_order.insert(block, (peer, index)) {
                     if old_index != index {
                         // old index exists and isn't equal to the new one
                         return Err(ConsensusError::DifferingBlocksOrder {
                             order_1: BlocksOrder {
                                 peer: peer.id.clone(),
-                                order: peer.blocks_payloads().into_iter().cloned().collect(),
+                                order: peer.blocks().into_iter().map(BlockInfo::new).collect(),
                             },
                             order_2: BlocksOrder {
                                 peer: old_peer.id.clone(),
-                                order: old_peer.blocks_payloads().into_iter().cloned().collect(),
+                                order: old_peer.blocks().into_iter().map(BlockInfo::new).collect(),
                             },
                         });
                     }
@@ -236,8 +254,12 @@ impl Network {
         expected_peers: &BTreeMap<PeerId, PeerStatus>,
         num_expected_observations: usize,
     ) -> Result<(), ConsensusError> {
-        // Check the number of consensused blocks.
-        let got = unwrap!(self.active_peers().next()).blocks_payloads().len();
+        // Check the number of consensused blocks (ignore excess blocks).
+        let got = unwrap!(self.active_peers().next())
+            .blocks()
+            .iter()
+            .filter(|block| !block.is_excess())
+            .count();
         if num_expected_observations != got {
             return Err(ConsensusError::WrongBlocksNumber {
                 expected: num_expected_observations,
@@ -279,7 +301,9 @@ impl Network {
             });
         }
 
-        let consensus_mode = if let ParsecObservation::OpaquePayload(_) = *block.payload() {
+        let consensus_mode = if block.is_excess() {
+            ConsensusMode::Single
+        } else if let ParsecObservation::OpaquePayload(_) = *block.payload() {
             self.consensus_mode
         } else {
             ConsensusMode::Supermajority

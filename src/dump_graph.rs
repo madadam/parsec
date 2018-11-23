@@ -567,12 +567,12 @@ mod detail {
                 Self::COMMENT,
                 self.indentation()
             ));
-            for hash in self.meta_elections.consensus_history() {
+            for info in self.meta_elections.consensus_history() {
                 lines.push(format!(
                     "{}{}{}",
                     Self::COMMENT,
                     self.indentation(),
-                    hash.0.full_display()
+                    info.hash.0.full_display()
                 ));
             }
             for handle in self.meta_elections.all() {
@@ -717,7 +717,7 @@ mod detail {
                     let interesting_content = mev
                         .interesting_content
                         .iter()
-                        .map(|obs_hash| unwrap!(self.observations.get(obs_hash)))
+                        .map(|hash| unwrap!(self.observations.get(hash)))
                         .cloned()
                         .collect::<Vec<_>>();
                     lines.push(format!(
@@ -793,7 +793,7 @@ mod detail {
                     let interesting_content = meta_event
                         .interesting_content
                         .iter()
-                        .map(|obs_hash| unwrap!(observations_map.get(obs_hash)))
+                        .map(|hash| unwrap!(observations_map.get(&hash)))
                         .collect::<Vec<_>>();
                     attr.label = format!(
                         "{}<tr><td colspan=\"6\">{:?}</td></tr>",

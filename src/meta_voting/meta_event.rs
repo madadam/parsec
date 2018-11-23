@@ -69,8 +69,8 @@ impl<'a, T: NetworkEvent + 'a, P: PublicId + 'a> MetaEventBuilder<'a, T, P> {
         self.meta_event.observees = observees;
     }
 
-    pub fn set_interesting_content(&mut self, content_hash: Vec<ObservationHash>) {
-        self.meta_event.interesting_content = content_hash;
+    pub fn set_interesting_content(&mut self, content: Vec<ObservationHash>) {
+        self.meta_event.interesting_content = content;
     }
 
     pub fn add_meta_votes(&mut self, peer_id: P, votes: Vec<MetaVote>) {
