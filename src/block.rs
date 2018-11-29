@@ -19,11 +19,12 @@ use vote::Vote;
 pub struct Block<T: NetworkEvent, P: PublicId> {
     payload: Observation<T, P>,
     proofs: BTreeSet<Proof<P>>,
+    excess: bool,
 }
 
 impl<T: NetworkEvent, P: PublicId> Block<T, P> {
     /// Creates a `Block` from `votes`.
-    pub fn new(votes: &BTreeMap<P, Vote<T, P>>) -> Result<Self, Error> {
+    pub fn new(votes: &BTreeMap<P, Vote<T, P>>, excess: bool) -> Result<Self, Error> {
         let payload = if let Some(vote) = votes.values().next() {
             vote.payload().clone()
         } else {
@@ -41,7 +42,11 @@ impl<T: NetworkEvent, P: PublicId> Block<T, P> {
             }).collect();
         let proofs = proofs?;
 
-        Ok(Self { payload, proofs })
+        Ok(Self {
+            payload,
+            proofs,
+            excess,
+        })
     }
 
     /// Returns the payload of this block.
@@ -52,6 +57,19 @@ impl<T: NetworkEvent, P: PublicId> Block<T, P> {
     /// Returns the proofs of this block.
     pub fn proofs(&self) -> &BTreeSet<Proof<P>> {
         &self.proofs
+    }
+
+    /// Returns iterator over ids of the peers that signed this block.
+    pub fn signatories(&self) -> impl Iterator<Item = &P> {
+        self.proofs.iter().map(|p| &p.public_id)
+    }
+
+    /// Is this an "excess" block?
+    /// Excess block is a block signed by less than the required number of voters.
+    /// Excess block can only be retrieved from `Parsec` if a regular block with the same payload
+    /// has already been retrieved before.
+    pub fn is_excess(&self) -> bool {
+        self.excess
     }
 
     /// Converts `vote` to a `Proof` and attempts to add it to the block.  Returns an error if

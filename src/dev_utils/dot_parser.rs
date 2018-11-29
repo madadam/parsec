@@ -10,7 +10,8 @@ use gossip::{CauseInput, Event, EventIndex, Graph, IndexedEventRef};
 use hash::Hash;
 use hash::HASH_LEN;
 use meta_voting::{
-    BoolSet, MetaElection, MetaElectionHandle, MetaElections, MetaEvent, MetaVote, Step,
+    BoolSet, ConsensusInfo, MetaElection, MetaElectionHandle, MetaElections, MetaEvent, MetaVote,
+    Step,
 };
 use mock::{PeerId, Transaction};
 use observation::{Observation, ObservationHash, ObservationKey};
@@ -302,7 +303,7 @@ fn parse_last_ancestors() -> Parser<u8, BTreeMap<PeerId, usize>> {
 
 #[derive(Debug)]
 struct ParsedMetaElections {
-    consensus_history: Vec<ObservationKey<PeerId>>,
+    consensus_history: Vec<ConsensusInfo<PeerId>>,
     meta_elections: BTreeMap<MetaElectionHandle, ParsedMetaElection>,
 }
 
@@ -317,10 +318,12 @@ fn parse_meta_elections() -> Parser<u8, ParsedMetaElections> {
         })
 }
 
-fn parse_consensus_history() -> Parser<u8, Vec<ObservationKey<PeerId>>> {
-    let hash_line = comment_prefix()
-        * (parse_hash()).map(|hash| ObservationKey::Supermajority(ObservationHash(hash)))
-        - next_line();
+fn parse_consensus_history() -> Parser<u8, Vec<ConsensusInfo<PeerId>>> {
+    let hash_line = comment_prefix() * (parse_hash()).map(ObservationHash) - next_line();
+    let hash_line = hash_line.map(|hash| ConsensusInfo {
+        key: ObservationKey::Supermajority(hash),
+        carriers: BTreeSet::new(),
+    });
     comment_prefix() * seq(b"consensus_history:") * next_line() * hash_line.repeat(0..)
 }
 

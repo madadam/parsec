@@ -109,14 +109,19 @@ impl Peer {
         first
     }
 
-    /// Returns self.blocks
+    /// Returns all blocks
     pub fn blocks(&self) -> &[Block<Transaction, PeerId>] {
         &self.blocks
     }
 
-    /// Returns the payloads of `self.blocks` in the order in which they were returned by `poll()`.
-    pub fn blocks_payloads(&self) -> Vec<&Observation> {
-        self.blocks.iter().map(Block::payload).collect()
+    /// Returns only regular (non-excess) blocks
+    pub fn regular_blocks(&self) -> impl Iterator<Item = &Block<Transaction, PeerId>> {
+        self.blocks.iter().filter(|block| !block.is_excess())
+    }
+
+    /// Returns the payloads of regular blocks in the order in which they were returned by `poll()`.
+    pub fn regular_blocks_payloads(&self) -> impl Iterator<Item = &Observation> {
+        self.regular_blocks().map(Block::payload)
     }
 
     /// Returns iterator over all accusations raised by this peer that haven't been retrieved by

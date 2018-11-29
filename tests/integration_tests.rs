@@ -77,7 +77,8 @@ use rand::Rng;
 use std::collections::BTreeMap;
 
 // Alter the seed here to reproduce failures
-static SEED: RngChoice = RngChoice::SeededRandom;
+// static SEED: RngChoice = RngChoice::SeededRandom;
+static SEED: RngChoice = RngChoice::Seeded([2330657697, 2112756150, 1776685349, 566375539]);
 
 #[test]
 fn minimal_network() {

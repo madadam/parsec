@@ -567,12 +567,12 @@ mod detail {
                 Self::COMMENT,
                 self.indentation()
             ));
-            for key in self.meta_elections.consensus_history() {
+            for info in self.meta_elections.consensus_history() {
                 lines.push(format!(
                     "{}{}{}",
                     Self::COMMENT,
                     self.indentation(),
-                    key.hash().0.full_display()
+                    info.key.hash().0.full_display()
                 ));
             }
             for handle in self.meta_elections.all() {
