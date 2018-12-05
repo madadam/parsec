@@ -19,11 +19,12 @@ use vote::Vote;
 pub struct Block<T: NetworkEvent, P: PublicId> {
     payload: Observation<T, P>,
     proofs: BTreeSet<Proof<P>>,
+    block_type: BlockType,
 }
 
 impl<T: NetworkEvent, P: PublicId> Block<T, P> {
     /// Creates a `Block` from `votes`.
-    pub fn new(votes: &BTreeMap<P, Vote<T, P>>) -> Result<Self, Error> {
+    pub fn new(votes: &BTreeMap<P, Vote<T, P>>, block_type: BlockType) -> Result<Self, Error> {
         let payload = if let Some(vote) = votes.values().next() {
             vote.payload().clone()
         } else {
@@ -41,7 +42,11 @@ impl<T: NetworkEvent, P: PublicId> Block<T, P> {
             }).collect();
         let proofs = proofs?;
 
-        Ok(Self { payload, proofs })
+        Ok(Self {
+            payload,
+            proofs,
+            block_type,
+        })
     }
 
     /// Returns the payload of this block.
@@ -52,6 +57,26 @@ impl<T: NetworkEvent, P: PublicId> Block<T, P> {
     /// Returns the proofs of this block.
     pub fn proofs(&self) -> &BTreeSet<Proof<P>> {
         &self.proofs
+    }
+
+    /// Returns iterator over ids of the peers that signed this block.
+    pub fn signatories(&self) -> impl Iterator<Item = &P> {
+        self.proofs.iter().map(|p| &p.public_id)
+    }
+
+    /// Type of this block: Regular or Excess
+    pub fn block_type(&self) -> BlockType {
+        self.block_type
+    }
+
+    /// Is this a regular block?
+    pub fn is_regular(&self) -> bool {
+        self.block_type == BlockType::Regular
+    }
+
+    /// Is this an excess block?
+    pub fn is_excess(&self) -> bool {
+        self.block_type == BlockType::Excess
     }
 
     /// Converts `vote` to a `Proof` and attempts to add it to the block.  Returns an error if
@@ -65,4 +90,19 @@ impl<T: NetworkEvent, P: PublicId> Block<T, P> {
         let proof = vote.create_proof(peer_id)?;
         Ok(self.proofs.insert(proof))
     }
+
+    /// Extract the payload and proofs from this block.
+    pub fn into_payload_and_proofs(self) -> (Observation<T, P>, BTreeSet<Proof<P>>) {
+        (self.payload, self.proofs)
+    }
+}
+
+/// Type of a `Block`: Regular or Excess
+#[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Debug)]
+pub enum BlockType {
+    /// Regular blocks are signed by the required number of peers.
+    Regular,
+    /// Excess blocks contain additional votes cast after the corresponding regular block was
+    /// created.
+    Excess,
 }

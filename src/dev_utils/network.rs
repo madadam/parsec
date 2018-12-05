@@ -152,19 +152,20 @@ impl Network {
     /// Returns true if all peers hold the same sequence of stable blocks.
     fn blocks_all_in_sequence(&self) -> Result<(), ConsensusError> {
         let first_peer = unwrap!(self.active_peers().next());
-        let payloads = first_peer.blocks_payloads();
-        if let Some(peer) = self
-            .active_peers()
-            .find(|peer| peer.blocks_payloads() != payloads)
-        {
+
+        if let Some(other_peer) = self.active_peers().find(|other_peer| {
+            let payloads0 = first_peer.regular_blocks_payloads();
+            let payloads1 = other_peer.regular_blocks_payloads();
+            !payloads0.eq(payloads1)
+        }) {
             Err(ConsensusError::DifferingBlocksOrder {
                 order_1: BlocksOrder {
                     peer: first_peer.id.clone(),
-                    order: payloads.into_iter().cloned().collect(),
+                    order: first_peer.regular_blocks_payloads().cloned().collect(),
                 },
                 order_2: BlocksOrder {
-                    peer: peer.id.clone(),
-                    order: peer.blocks_payloads().into_iter().cloned().collect(),
+                    peer: other_peer.id.clone(),
+                    order: other_peer.regular_blocks_payloads().cloned().collect(),
                 },
             })
         } else {
@@ -277,7 +278,7 @@ impl Network {
     fn check_consensus_broken(&self) -> Result<(), ConsensusError> {
         let mut block_order = BTreeMap::new();
         for peer in self.active_peers() {
-            for (index, block) in peer.blocks().into_iter().enumerate() {
+            for (index, block) in peer.regular_blocks().enumerate() {
                 let key = self.block_key(block);
 
                 if let Some((old_peer, old_index)) = block_order.insert(key, (peer, index)) {
@@ -286,11 +287,11 @@ impl Network {
                         return Err(ConsensusError::DifferingBlocksOrder {
                             order_1: BlocksOrder {
                                 peer: peer.id.clone(),
-                                order: peer.blocks_payloads().into_iter().cloned().collect(),
+                                order: peer.regular_blocks_payloads().cloned().collect(),
                             },
                             order_2: BlocksOrder {
                                 peer: old_peer.id.clone(),
-                                order: old_peer.blocks_payloads().into_iter().cloned().collect(),
+                                order: old_peer.regular_blocks_payloads().cloned().collect(),
                             },
                         });
                     }
@@ -337,7 +338,7 @@ impl Network {
         max_expected_observations: usize,
     ) -> Result<(), ConsensusError> {
         // Check the number of consensused blocks.
-        let got = unwrap!(self.active_peers().next()).blocks_payloads().len();
+        let got = unwrap!(self.active_peers().next()).regular_blocks().count();
         if got < min_expected_observations || got > max_expected_observations {
             return Err(ConsensusError::WrongBlocksNumber {
                 expected_min: min_expected_observations,
@@ -380,7 +381,9 @@ impl Network {
             });
         }
 
-        let consensus_mode = if block.payload().is_opaque() {
+        let consensus_mode = if block.is_excess() {
+            ConsensusMode::Single
+        } else if block.payload().is_opaque() {
             self.consensus_mode
         } else {
             ConsensusMode::Supermajority
@@ -405,6 +408,13 @@ impl Network {
         let blocks = self.active_peers().next().unwrap().blocks();
         let mut valid_voters = BTreeSet::new();
         for block in blocks {
+            // Do not modify `valid_voters` on excess blocks, as they should have been modified on
+            // the preceding regular blocks.
+            if block.is_excess() {
+                self.check_block_signatories(block, &valid_voters)?;
+                continue;
+            }
+
             match *block.payload() {
                 ParsecObservation::Genesis(ref g) => {
                     // explicitly don't check signatories - the list of valid voters

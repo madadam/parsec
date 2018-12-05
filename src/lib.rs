@@ -210,7 +210,7 @@ pub mod dev_utils;
 #[cfg(any(test, feature = "mock"))]
 pub mod mock;
 
-pub use block::Block;
+pub use block::{Block, BlockType};
 #[cfg(feature = "dump-graphs")]
 pub use dump_graph::DIR;
 pub use error::{Error, Result};
