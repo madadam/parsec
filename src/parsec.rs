@@ -317,14 +317,28 @@ impl<T: NetworkEvent, S: SecretId> Parsec<T, S> {
         let peer_index = self.get_peer_index(peer_id)?;
         self.confirm_allowed_to_gossip_to(peer_index)?;
 
-        self.add_requesting_event(peer_id)?;
-
         let events = if self.peer_list.last_event(peer_index).is_some() {
             self.events_to_gossip_to_peer(peer_index)?
         } else {
             self.graph.iter().map(|e| e.inner()).collect()
         };
-        self.pack_events(events).map(Request::new)
+
+        if events.is_empty() {
+            return Err(Error::EmptyGossip);
+        }
+
+        let mut packed_events = Vec::new();
+        self.pack_events_into(events, &mut packed_events)?;
+
+        // Add `Requesting` event to our graph and to the request.
+        let new_event_index = self.add_requesting_event(peer_id)?;
+        let new_events = self
+            .graph
+            .iter_from(new_event_index.topological_index())
+            .map(|event| event.inner());
+        self.pack_events_into(new_events, &mut packed_events)?;
+
+        Ok(Request::new(packed_events))
     }
 
     fn create_sole_voter_gossip_event(&mut self) -> Result<()> {
@@ -333,24 +347,21 @@ impl<T: NetworkEvent, S: SecretId> Parsec<T, S> {
         }
 
         let self_id = self.our_pub_id().clone();
-        self.add_requesting_event(&self_id)
+        let _ = self.add_requesting_event(&self_id)?;
+
+        Ok(())
     }
 
-    fn add_requesting_event(&mut self, peer_id: &S::PublicId) -> Result<()> {
+    fn add_requesting_event(&mut self, peer_id: &S::PublicId) -> Result<EventIndex> {
         debug!(
             "{:?} creating gossip request for {:?}",
             self.our_pub_id(),
             peer_id
         );
 
-        let self_parent = self.peer_list.last_event(PeerIndex::OUR).ok_or_else(|| {
-            log_or_panic!("{:?} missing our own last event hash.", self.our_pub_id());
-            Error::Logic
-        })?;
+        let self_parent = self.our_last_event_index()?;
         let sync_event = Event::new_from_requesting(self_parent, peer_id, self.event_context())?;
-        let _ = self.add_event(sync_event)?;
-
-        Ok(())
+        self.add_event(sync_event)
     }
 
     /// Handles a `Request` the owning peer received from the `src` peer.  Returns a `Response` to
@@ -595,15 +606,34 @@ impl<T: NetworkEvent, S: SecretId> Parsec<T, S> {
         })
     }
 
+    fn pack_events_into<'a, I>(
+        &self,
+        events: I,
+        packed_events: &mut Vec<PackedEvent<T, S::PublicId>>,
+    ) -> Result<()>
+    where
+        I: IntoIterator<Item = &'a Event<S::PublicId>>,
+        S::PublicId: 'a,
+    {
+        let events = events.into_iter();
+
+        packed_events.reserve(events.size_hint().0);
+
+        for event in events {
+            packed_events.push(event.pack(self.event_context())?);
+        }
+
+        Ok(())
+    }
+
     fn pack_events<'a, I>(&self, events: I) -> Result<Vec<PackedEvent<T, S::PublicId>>>
     where
         I: IntoIterator<Item = &'a Event<S::PublicId>>,
         S::PublicId: 'a,
     {
-        events
-            .into_iter()
-            .map(|event| event.pack(self.event_context()))
-            .collect()
+        let mut packed_events = Vec::new();
+        self.pack_events_into(events, &mut packed_events)?;
+        Ok(packed_events)
     }
 
     // Returns the list peers which have created forked events, and the event to use as the

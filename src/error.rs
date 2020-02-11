@@ -55,6 +55,8 @@ pub enum Error {
     DuplicateMessage,
     /// Faild DKG process
     FailedDkg,
+    /// We attempted to create a gossip but the recipient already knows everything we do.
+    EmptyGossip,
     /// Logic error.
     Logic,
 }
@@ -101,6 +103,7 @@ impl Display for Error {
             Error::InvalidMessage => write!(f, "This non-empty message is invalid."),
             Error::DuplicateMessage => write!(f, "This message has already been handled."),
             Error::FailedDkg => write!(f, "The requested DKG could not proceed."),
+            Error::EmptyGossip => write!(f, "The gossip message is empty"),
             Error::Logic => write!(
                 f,
                 "This is a logic error and represents a flaw in the code."
